@@ -24,8 +24,10 @@ for contributors working on LiteArm VLA data collection.
 - The collection process is the only LiteArm hardware owner. Do not run
   `litearm-vr-follow`, LiteArm Studio, or another robot controller at the same
   time.
-- The first kinesthetic recorder supports a seven-joint arm without a gripper.
-  Do not invent a gripper action from measured position or a sentinel value.
+- The recorder supports a seven-joint arm and an optional keyboard-driven
+  LiteGrip. Record the gripper action as the target actually commanded (open
+  endpoint, closed stop, or a hold command), never as a value inferred from
+  measured position or a sentinel.
 
 ## Data contract
 

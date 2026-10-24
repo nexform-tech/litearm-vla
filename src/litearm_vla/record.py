@@ -28,9 +28,49 @@ from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, log_say
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
+from .gripper import LiteGripOptions
 from .kinesthetic import RECORD_FPS, KinestheticRobot, KinestheticRobotConfig
 
 log = logging.getLogger(__name__)
+
+
+def init_gripper_keyboard_listener(
+    options: LiteGripOptions, events: dict[str, bool]
+) -> Any | None:
+    """Latch open/close keys into ``events`` for the recording loop.
+
+    A separate listener keeps LeRobot's arrow and escape bindings untouched.
+    The loop applies the latch on the main thread, so the worker never reads
+    the keyboard directly.
+    """
+    if is_headless():
+        log.warning(
+            "Headless environment: gripper keys %r/%r are unavailable",
+            options.open_key,
+            options.close_key,
+        )
+        return None
+
+    from pynput import keyboard
+
+    open_key = options.open_key.lower()
+    close_key = options.close_key.lower()
+
+    def on_press(key: Any) -> None:
+        char = getattr(key, "char", None)
+        if not isinstance(char, str):
+            return
+        char = char.lower()
+        if char == open_key:
+            log.info("Opening the gripper")
+            events["gripper_open"] = True
+        elif char == close_key:
+            log.info("Closing the gripper")
+            events["gripper_close"] = True
+
+    listener = keyboard.Listener(on_press=on_press)
+    listener.start()
+    return listener
 
 
 class SamplingRateError(RuntimeError):
@@ -135,6 +175,12 @@ def record_kinesthetic_loop(
             )
         previous_observation = sample.observation
 
+        # Apply gripper keys after sampling so the command recorded with the
+        # interval that just ended is the one that was in effect during it.
+        apply_keys = getattr(robot, "apply_keyboard_events", None)
+        if apply_keys is not None:
+            apply_keys(events)
+
         next_tick += period_s
         precise_sleep(max(0.0, next_tick - time.perf_counter()))
 
@@ -214,8 +260,14 @@ def record_kinesthetic(cfg: KinestheticRecordConfig) -> LeRobotDataset:
     )
 
     robot = KinestheticRobot(cfg.robot)
+    if getattr(robot, "gripper", None) is not None and is_headless():
+        raise RuntimeError(
+            "gripper keyboard control needs a graphical session; "
+            "run with a display or disable --robot.gripper.enabled"
+        )
     dataset: LeRobotDataset | None = None
     listener = None
+    gripper_listener = None
     try:
         # Connection includes feedback checks, optional explicit enable,
         # zero-gravity confirmation, safety monitoring, and cameras. No dataset
@@ -225,6 +277,11 @@ def record_kinesthetic(cfg: KinestheticRecordConfig) -> LeRobotDataset:
 
         with VideoEncodingManager(dataset):
             listener, events = init_keyboard_listener()
+            gripper_listener = (
+                init_gripper_keyboard_listener(cfg.robot.gripper, events)
+                if getattr(robot, "gripper", None) is not None
+                else None
+            )
             recorded_episodes = 0
             while (
                 recorded_episodes < cfg.dataset.num_episodes
@@ -293,8 +350,9 @@ def record_kinesthetic(cfg: KinestheticRecordConfig) -> LeRobotDataset:
             try:
                 robot.disconnect()
             finally:
-                if not is_headless() and listener is not None:
-                    listener.stop()
+                for key_listener in (listener, gripper_listener):
+                    if not is_headless() and key_listener is not None:
+                        key_listener.stop()
 
     if cfg.dataset.push_to_hub:
         dataset.push_to_hub(tags=cfg.dataset.tags, private=cfg.dataset.private)

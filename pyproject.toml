@@ -13,6 +13,9 @@ dependencies = [
     "lerobot==0.4.4",
     "litearm-python>=2.1.0,<3",
     "litearm-lerobot",
+    # The gripper SDK is not on PyPI; pin the upstream commit so an install
+    # reproduces the API this adapter uses (fresh/data_age_s status fields).
+    "litegrip @ git+https://github.com/nexform-tech/litegrip-python.git@0d46d6d8c598c0caa1ca863748dffb0328d5b80e",
 ]
 
 [project.optional-dependencies]

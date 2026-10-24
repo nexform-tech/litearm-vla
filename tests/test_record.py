@@ -89,6 +89,37 @@ def test_loop_pairs_q_t_with_q_t_plus_one_and_drops_last(monkeypatch):
     assert not samples
 
 
+def test_loop_applies_gripper_keys_after_sampling(monkeypatch):
+    class Robot:
+        def __init__(self):
+            self.applied = []
+
+        def capture_sample(self):
+            return KinestheticSample({"joint1.pos": 0.0}, {"joint1.pos": 0.0})
+
+        def apply_keyboard_events(self, events):
+            self.applied.append(dict(events))
+            events.pop("gripper_open", None)
+
+    robot = Robot()
+    clock = {"now": 0.0}
+    monkeypatch.setattr(recording.time, "perf_counter", lambda: clock["now"])
+    monkeypatch.setattr(
+        recording,
+        "precise_sleep",
+        lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
+    )
+    events = {"exit_early": False, "gripper_open": True}
+
+    recording.record_kinesthetic_loop(
+        robot, events, control_time_s=0.04, task="hand guide"
+    )
+
+    assert robot.applied
+    assert robot.applied[0]["gripper_open"] is True
+    assert events == {"exit_early": False}
+
+
 def test_record_config_requires_30_hz_and_camera_for_video(tmp_path):
     robot_cfg = _robot_config(tmp_path)
     dataset_cfg = recording.DatasetRecordConfig(
@@ -106,6 +137,36 @@ def test_record_config_requires_30_hz_and_camera_for_video(tmp_path):
     dataset_cfg.fps = 20
     with pytest.raises(ValueError, match="30"):
         recording.KinestheticRecordConfig(robot=robot_cfg, dataset=dataset_cfg)
+
+
+def test_recording_rejects_gripper_without_a_display(monkeypatch, tmp_path):
+    from litearm_vla.gripper import LiteGripOptions
+
+    class Robot:
+        gripper = object()
+
+        def __init__(self, config):
+            self.config = config
+
+    monkeypatch.setattr(recording, "KinestheticRobot", Robot)
+    monkeypatch.setattr(recording, "is_headless", lambda: True)
+    robot_cfg = KinestheticRobotConfig(
+        calibration_dir=tmp_path / "calibration",
+        auto_enable=True,
+        gripper=LiteGripOptions(enabled=True),
+    )
+    dataset_cfg = recording.DatasetRecordConfig(
+        repo_id="tests/headless-gripper",
+        single_task="hand guide",
+        root=tmp_path / "unused",
+        fps=30,
+        video=False,
+        push_to_hub=False,
+    )
+    cfg = recording.KinestheticRecordConfig(robot=robot_cfg, dataset=dataset_cfg)
+
+    with pytest.raises(RuntimeError, match="graphical"):
+        recording.record_kinesthetic(cfg)
 
 
 def test_real_lerobot_dataset_reopens_with_future_joint_actions(

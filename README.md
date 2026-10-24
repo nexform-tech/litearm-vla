@@ -17,11 +17,18 @@ litearm-lerobot (Robot lifecycle and firmware limits)
 litearm-python (USB CDC and zero-gravity keepalive)
 ```
 
+The optional gripper path is separate: `litearm_vla.gripper` → `litegrip-python`
+→ SocketCAN. It shares the recorder's safety monitor but not the arm's USB CDC
+link.
+
 ## Data contract
 
-- Seven arm joints, no gripper in this first version.
-- `observation.state[t]` is the measured joint vector `q[t]`.
-- `action[t]` is the next measured vector `q[t+1]`.
+- Seven arm joints. The LiteGrip is optional and off by default.
+- `observation.state[t]` is the measured joint vector `q[t]`, plus
+  `gripper.pos` in millimetres when the gripper is enabled.
+- `action[t]` is the next measured vector `q[t+1]` for the arm. For the
+  gripper it is `gripper.pos`, the target commanded at that sample: the open
+  endpoint, the closed stop (`0`), or the measured opening held at connect.
 - The final observation is dropped because it has no future action.
 - Recording is fixed at 30 Hz and slow episodes are discarded.
 - LeRobot owns cameras, dataset features, video encoding, episode save, resume,
@@ -42,8 +49,16 @@ PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
   python -m pytest tests/ -q -p no:cacheprovider -rs
 ```
 
-The tests fake the arm and cameras. They do not open serial, camera, CAN, or
-network robot devices.
+`litearm-vla` installs the gripper SDK from its upstream Git commit because
+`litegrip` is not on PyPI:
+
+```bash
+python -m pip install \
+  "git+https://github.com/nexform-tech/litegrip-python.git@0d46d6d8c598c0caa1ca863748dffb0328d5b80e"
+```
+
+The tests fake the arm, cameras, and gripper. They do not open serial, camera,
+CAN, or network robot devices.
 
 ## Hardware preflight
 
@@ -109,6 +124,36 @@ arm.close()            # close() stops the link; it does not disable the arm
 enabled means the recorder skips `enable()` and enters zero-gravity
 immediately. Do not disable the arm to park it: it will sag out of the limits.
 
+### Gripper CAN link
+
+The LiteGrip uses SocketCAN, not the arm's USB CDC. Bring the interface up at
+1 Mbit/s before every session and keep it exclusive to this process:
+
+```bash
+sudo ip link set can0 type can bitrate 1000000
+sudo ip link set can0 up
+ip -details link show can0
+```
+
+Then check the SDK's calibrated limits and enable path without moving the jaws:
+
+```bash
+python - <<'PY'
+from litegrip import LiteGrip
+
+with LiteGrip("can0") as gripper:
+    print("calibration:", gripper.load_calibration())
+    print("travel mm:", abs(gripper.config.pos_open_rad - gripper.config.pos_closed_rad)
+          * gripper.config.rad_to_mm)
+    print("enabled:", gripper.enable().ok)
+PY
+```
+
+If `load_calibration()` returns `False`, the factory file is for a different
+channel (it declares `can0`) or the local calibration is missing; pass
+`--robot.gripper.mount=reverse` or `--robot.gripper.calibration_file` for a
+non-standard unit. Do not start recording on placeholder limits.
+
 ## Record
 
 Do not run this command until `litearm-vr-follow`, LiteArm Studio, and every
@@ -123,6 +168,9 @@ litearm-vla-record \
   --robot.auto_enable=true \
   --robot.auto_clear_faults=true \
   --robot.ignored_flags='["WD_TRIPPED"]' \
+  --robot.payload_kg=0.62 \
+  --robot.gripper.enabled=true \
+  --robot.gripper.channel=can0 \
   --robot.cameras='{wrist: {type: opencv, index_or_path: /dev/video4, width: 640, height: 480, fps: 30}}' \
   --dataset.repo_id=local/litearm-hand-guide-smoke-v1 \
   --dataset.root=data/litearm-hand-guide-smoke-v1 \
@@ -137,7 +185,17 @@ litearm-vla-record \
 ```
 
 `auto_enable` defaults to `false`. Setting it to `true` is an explicit request
-to energize the arm. The process opens the arm exclusively, validates fresh
+to energize the arm. `--robot.gripper.enabled=true` is the equivalent opt-in for
+the gripper: it opens the CAN link, loads the calibration, and energizes the
+gripper motor before the dataset is created.
+
+`--robot.payload_kg=0.62` writes the tool payload into the firmware's gravity
+feed-forward before the arm is enabled, then reads item 4 back with
+`get_ff_scalar()` and fails closed if the firmware kept a different value. The
+write is RAM-only; call `Arm.save_params()` yourself if it must survive a power
+cycle. `set_payload()` also writes the centre of mass, so
+`--robot.payload_com` defaults to `(0, 0, 0)`; pass the measured offset if the
+tool does not balance at the flange. The process opens the arm exclusively, validates fresh
 feedback and firmware limits, enters zero-gravity once, and keeps it active
 across recording, reset, discard, and save phases.
 
@@ -145,6 +203,9 @@ across recording, reset, discard, and save phases.
 - Left arrow: discard the current episode and record it again.
 - Escape: stop the session, finalize the dataset, leave zero-gravity, hold the
   measured pose, and close USB CDC.
+- `o`: open the gripper (`--robot.gripper.open_key`).
+- `c`: close and hold the gripper with `grasp()`
+  (`--robot.gripper.close_key`, force `--robot.gripper.grasp_force_n`).
 
 A normal exit stops zero-gravity, verifies a fresh safe state, performs a
 zero-displacement `movej` hand-off, and closes the link. It does **not** disable
@@ -152,6 +213,13 @@ the arm, so the arm stays enabled holding the measured pose. A safety fault
 takes the same path: zero-gravity stops and the arm holds its measured pose. This
 program never emergency-stops or disables the arm; the physical emergency stop
 stays the emergency path.
+
+The gripper follows the SDK lifecycle instead: between moves a background
+worker streams zero-displacement hold frames, and shutdown sends a zero-torque
+frame and closes the CAN session, which disables the motor. The jaws release on
+exit, so do not rely on the gripper to hold a part after the process ends.
+Keyboard control needs a graphical session; with `--robot.gripper.enabled=true`
+a headless run stops before opening either device.
 
 See [the recording guide](docs/kinesthetic-recording.md) for the staged hardware
 gate and dataset checks.
@@ -178,6 +246,32 @@ what it cleared, and re-runs the full safety check. It never clears while the ar
 is enabled, and a fault whose physical cause persists simply re-latches.
 Repeated `FB_STALE` on different joints while enabling points at the CAN side:
 check the motor cabling and power-cycle the arm.
+
+**The gripper fails to enable with `[Errno 100] Network is down`.** The
+SocketCAN interface exists but is administratively down. `LiteGrip.connect()`
+can open a raw socket on a down interface; the first transmit fails, so
+`enable()` retries three times and returns `err=0`. Bring it up first:
+
+```bash
+sudo ip link set can0 type can bitrate 1000000
+sudo ip link set can0 up
+ip -details link show can0
+```
+
+`state UP` and `can state ERROR-ACTIVE` are required. If the interface drops
+again, check the USB adapter (`gs_usb`) with `dmesg`, the cable, and the 120 Ω
+bus termination.
+
+**The gripper ignored the local calibration.** A no-argument
+`load_calibration()` reads only the shipped factory file; the SDK deliberately
+does not pick up `~/.litegrip/can0_08_calibration.json`. Pass it explicitly:
+
+```bash
+--robot.gripper.calibration_file=/home/yd/.litegrip/can0_08_calibration.json
+```
+
+or set `LITEGRIP_CALIB` for the session. Use the factory file only when the
+unit is the shipped normal-mount configuration.
 
 **The episode is static.** `unique rows: 1` in the dataset check means the arm
 was never moved. Zero-gravity makes the arm easy to drag, but it does not move

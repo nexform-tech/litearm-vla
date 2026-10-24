@@ -9,13 +9,14 @@
 在 `litearm-lerobot` Conda 环境中，从 `/home/yd/wl/VLA/litearm-vla` 开始操作：
 
 ```bash
-python -c 'import lerobot, litearm, litearm_lerobot; print(lerobot.__version__, litearm.__version__)'
+python -c 'import lerobot, litearm, litearm_lerobot, litegrip; print(lerobot.__version__, litearm.__version__, litegrip.__file__)'
 PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
   python -m pytest tests/ -q -p no:cacheprovider -rs
 ```
 
-预期版本为 LeRobot `0.4.4` 和 litearm-python `2.1.0`。在进行硬件操作之前，所有
-离线测试都必须通过。
+预期版本为 LeRobot `0.4.4` 和 litearm-python `2.1.0`。`litegrip` 从 commit
+`0d46d6d` 安装；适配器依赖它的状态新鲜度字段（`fresh` / `data_age_s`）。在进行
+硬件操作之前，所有离线测试都必须通过。
 
 ## 2. 准备硬件
 
@@ -44,7 +45,28 @@ PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
    `exit=0` 表示有帧。如果节点存在但收不到帧，拔插相机给它断电重启；软件层的
    USB reset 无法恢复。不要运行会自动杀掉相机占用进程的工具。
 
-5. 在启动录制之前，把机械臂放到固件限位以内。录制程序会在臂仍处于失能状态时，
+5. 如果启用夹爪，先拉起它独立的 CAN 链路，并在会话前确认标定行程：
+
+   ```bash
+   sudo ip link set can0 type can bitrate 1000000
+   sudo ip link set can0 up
+   python - <<'PY'
+   from litegrip import LiteGrip
+
+   with LiteGrip("can0") as gripper:
+       assert gripper.load_calibration()
+       assert gripper.enable().ok
+       print("calibrated:", gripper.config.calibrated)
+   PY
+   ```
+
+   `can0` 必须由本进程独占。`ip -details link show can0` 必须显示 `state UP` 和
+   `can state ERROR-ACTIVE`；接口处于 DOWN 时仍能连接，但每次发送都会报
+   `[Errno 100] Network is down`。标定返回 `False` 说明出厂文件对应的是别的通道，
+   或该单元需要模板/标定文件；见 README。不要在占位限位上继续。无参加载只读 SDK
+   自带的出厂文件——该单元有本机标定时请传 `--robot.gripper.calibration_file`。
+
+6. 在启动录制之前，把机械臂放到固件限位以内。录制程序会在臂仍处于失能状态时，
    按固件限位内缩 0.01 rad 逐轴检查；软塌的臂会掉出范围——J4 的正向行程只有约
    0.0175 rad。请通过 SDK 回零并保持使能；`Arm.close()` 不会失能：
 
@@ -89,6 +111,14 @@ PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 命令启动后几秒内就会进入零重力。请提前告知在场人员、站到臂旁，并在 episode
 期间**实际拖动机械臂**——零重力下它很容易被拖动，但它不会自己动。
 
+启用 `--robot.gripper.enabled=true` 后，按 `o` 张开、按 `c` 闭合并保持夹持。
+首次按键走到标定端点；新的按键会在一个切片（`grasp_hold_s`，默认 0.2 s）内打断
+正在进行的夹取。夹爪在创建数据集之前完成连接，并与机械臂共用同一套安全监控。
+
+`--robot.payload_kg=0.62` 会在使能前把末端负载质量写入固件的重力前馈，并通过读回
+校验。`set_payload()` 同时会写质心，因此默认的 `payload_com=(0, 0, 0)` 会清除已有
+偏移。该写入只改 RAM。
+
 锁存故障会阻止运行。只要存在 `FAULT`、`POS_VIOL`、`FB_STALE` 或 `joint_fault`
 中的任何一项，`robot.connect()` 就会在使能之前抛错。README 中的命令带有
 `--robot.auto_clear_faults=true`，它会在重新执行安全检查之前，清除上一次故障关闭
@@ -100,7 +130,8 @@ README 中的命令带有 `--robot.ignored_flags='["WD_TRIPPED"]'`，它把瞬�
 参数，其他故障位、温度与限位检查以及主机侧保活健康度仍然是致命的。
 
 只有在 CDC 连接、固件限位读取、失能姿态安全检查、使能后立即进入零重力、
-零重力确认、安全监控启动以及相机连接全部成功之后，进程才会创建数据集。
+零重力确认、夹爪连接（启用时）、安全监控启动以及相机连接全部成功之后，进程才会
+创建数据集。
 使能后必须立即交接给零重力保活，因为固件命令看门狗会在使能时开始计时。
 
 LeRobot 保存并编码 episode 期间，安全监控保持活动。它检查反馈时效、使能状态、
@@ -135,19 +166,27 @@ print("unique states:", len(np.unique(np.round(observation, 6), axis=0)))
 print("per-joint range:", np.round(observation.max(0) - observation.min(0), 4))
 print("finite:", np.isfinite(observation).all() and np.isfinite(action).all())
 print(
-    "max pairing error:",
+    "max arm pairing error:",
     max(
-        np.abs(action[start:stop - 1] - observation[start + 1:stop]).max()
+        np.abs(action[start:stop - 1, :7] - observation[start + 1:stop, :7]).max()
         for start, stop in bounds
         if stop - start > 1
     ),
 )
+if observation.shape[1] > 7:
+    print("gripper opening range:", np.round(
+        observation[:, 7].max() - observation[:, 7].min(), 2
+    ), "mm")
 PY
 ```
 
-只有当数据集能重新打开、报告 30 Hz、包含有限的 `(N, 7)` 状态与动作数组，并且
-视频与物理任务相符时，才算通过。配对误差应接近零，因为 `action[t]` 就是
-`observation.state[t+1]`。
+只有当数据集能重新打开、报告 30 Hz、包含有限的 `(N, 7)` 或 `(N, 8)` 状态与动作
+数组，并且视频与物理任务相符时，才算通过。机械臂部分的配对误差应接近零，因为
+`action[t, :7]` 就是 `observation.state[t+1, :7]`。
+
+夹爪列按设计不同：`action[t, 7]` 是当拍下发的目标（张开端点、闭合零点或保持），
+不是下一拍的实测开口，通常只在两个常量之间取值。不要期望它等于
+`observation.state[t+1, 7]`。
 
 配对误差必须**按 episode 分别检查**。每个 episode 的最后一帧在本 episode 内没有
 未来动作，它的 `action` 就是该 episode 的最后一个实测状态。若对整个数据集直接用
