@@ -2,8 +2,9 @@
 
 The arm stays hand-guided; the gripper is the only device this recorder
 commands. :mod:`litearm_vla.record` turns key presses into open and grasp
-requests, and pairs each measured opening with the target that was in effect
-when the interval started.
+requests, and records the measured opening like the arm joints: each frame's
+action is the opening measured at the next sample, so the gripper column stays
+continuous while the jaws move.
 
 The controller keeps the CAN link busy for the whole session. A DM4310 latches
 a communication-loss fault about 100 ms after the frames stop, so between
@@ -142,10 +143,14 @@ class LiteGripOptions:
 
 @dataclass(frozen=True)
 class GripperSample:
-    """One measured opening and the target commanded for the next interval."""
+    """One measured opening.
+
+    The recorder pairs it with the previous observation exactly like the arm
+    joints: ``observation`` carries this opening and the next sample's opening
+    becomes ``action[t] = q[t+1]``.
+    """
 
     position_mm: float
-    target_mm: float
 
 
 class LiteGripController:
@@ -160,7 +165,6 @@ class LiteGripController:
         self._error: BaseException | None = None
         self._command: str | None = None
         self._applied_command: str | None = None
-        self._target_mm = 0.0
         self._open_mm = 0.0
         self._travel_mm = 0.0
 
@@ -206,7 +210,6 @@ class LiteGripController:
             raise
 
         self._gripper = gripper
-        self._target_mm = float(state.position_mm)
         self._stop.clear()
         self._error = None
         self._command = None
@@ -270,18 +273,17 @@ class LiteGripController:
         return self._gripper is not None
 
     def request_open(self) -> None:
-        self._request("open", self._open_mm)
+        self._request("open")
 
     def request_close(self) -> None:
-        self._request("close", 0.0)
+        self._request("close")
 
-    def _request(self, command: str, target_mm: float) -> None:
+    def _request(self, command: str) -> None:
         if self._gripper is None:
             raise GripperError("LiteGrip is not connected")
         self._raise_if_failed()
         with self._condition:
-            self._target_mm = target_mm
-            # Auto-repeat while the same target is already applied is a no-op;
+            # Auto-repeat while the same command is already applied is a no-op;
             # otherwise open()/grasp() would restart on every key repeat.
             if self._command == command or (
                 self._command is None and self._applied_command == command
@@ -299,10 +301,7 @@ class LiteGripController:
             raise GripperError("LiteGrip is not connected")
         state = gripper.get_state(wait=False)
         self._validate_state(state)
-        return GripperSample(
-            position_mm=float(state.position_mm),
-            target_mm=float(self._target_mm),
-        )
+        return GripperSample(position_mm=float(state.position_mm))
 
     def assert_safe(self) -> None:
         self._raise_if_failed()
@@ -394,7 +393,6 @@ class LiteGripController:
                 raise GripperError(
                     "LiteGrip reported a non-finite opening after a failed grasp"
                 )
-            self._target_mm = position
             # Let a fresh close press restart the grasp instead of being
             # swallowed as an auto-repeat of the command that just failed.
             self._applied_command = None

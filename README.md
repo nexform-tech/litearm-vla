@@ -26,9 +26,9 @@ link.
 - Seven arm joints. The LiteGrip is optional and off by default.
 - `observation.state[t]` is the measured joint vector `q[t]`, plus
   `gripper.pos` in millimetres when the gripper is enabled.
-- `action[t]` is the next measured vector `q[t+1]` for the arm. For the
-  gripper it is `gripper.pos`, the target commanded at that sample: the open
-  endpoint, the closed stop (`0`), or the measured opening held at connect.
+- `action[t]` is the next measured vector `q[t+1]`, including
+  `gripper.pos` when the gripper is enabled. The gripper follows the same rule
+  as the joints, so its action is continuous while the jaws move.
 - The final observation is dropped because it has no future action.
 - Recording is fixed at 30 Hz and slow episodes are discarded.
 - LeRobot owns cameras, dataset features, video encoding, episode save, resume,

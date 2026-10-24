@@ -191,9 +191,9 @@ print("unique states:", len(np.unique(np.round(observation, 6), axis=0)))
 print("per-joint range:", np.round(observation.max(0) - observation.min(0), 4))
 print("finite:", np.isfinite(observation).all() and np.isfinite(action).all())
 print(
-    "max arm pairing error:",
+    "max pairing error:",
     max(
-        np.abs(action[start:stop - 1, :7] - observation[start + 1:stop, :7]).max()
+        np.abs(action[start:stop - 1] - observation[start + 1:stop]).max()
         for start, stop in bounds
         if stop - start > 1
     ),
@@ -207,13 +207,10 @@ PY
 
 Pass only when the dataset reopens, reports 30 Hz, contains finite `(N, 7)` or
 `(N, 8)` state and action arrays, and the video matches the physical task. The
-arm pairing error should be near zero because `action[t, :7]` is
-`observation.state[t+1, :7]`.
-
-The gripper column is different by design: `action[t, 7]` is the target
-commanded at that sample (open endpoint, closed stop, or hold), not the next
-measured opening. It is usually one of two constants. Do not expect it to match
-`observation.state[t+1, 7]`.
+pairing error should be near zero because `action[t]` is
+`observation.state[t+1]` for every column, including `gripper.pos` when the
+gripper is enabled. The gripper action is therefore continuous while the jaws
+move; it is not the commanded target.
 
 Check pairing **within each episode**. The last frame of an episode has no
 future action in that episode, so its `action` is the episode's final measured

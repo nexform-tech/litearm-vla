@@ -175,8 +175,8 @@ def record_kinesthetic_loop(
             )
         previous_observation = sample.observation
 
-        # Apply gripper keys after sampling so the command recorded with the
-        # interval that just ended is the one that was in effect during it.
+        # Apply gripper keys after sampling so a press takes effect on the next
+        # interval. The paired action is the next measured opening either way.
         apply_keys = getattr(robot, "apply_keyboard_events", None)
         if apply_keys is not None:
             apply_keys(events)

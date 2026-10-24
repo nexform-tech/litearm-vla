@@ -25,8 +25,8 @@ litearm-python (USB CDC 与零重力保活)
 - 七个机械臂关节。LiteGrip 夹爪可选，默认关闭。
 - `observation.state[t]` 是测得的关节向量 `q[t]`；启用夹爪时还包含
   `gripper.pos`（单位毫米）。
-- `action[t]` 对机械臂是下一拍测得的向量 `q[t+1]`；对夹爪是当拍下发的目标
-  `gripper.pos`——张开端点、闭合零点 `0`，或连接时保持的实测开口。
+- `action[t]` 是下一拍测得的向量 `q[t+1]`，启用夹爪时也包含
+  `gripper.pos`。夹爪与关节遵循同一规则，因此夹爪动作在运动过程中是连续的。
 - 每条 episode 的最后一个观测被丢弃，因为它没有对应的后续动作。
 - 录制固定为 30 Hz，采样率不达标的 episode 会被丢弃。
 - 相机、数据集特征、视频编码、episode 保存、续录、重录控制以及可选的 Hub
@@ -163,8 +163,8 @@ litearm-vla-record \
   --robot.gripper.enabled=true \
   --robot.gripper.channel=can0 \
   --robot.cameras='{wrist: {type: opencv, index_or_path: /dev/video4, width: 640, height: 480, fps: 30}}' \
-  --dataset.repo_id=local/litearm-hand-guide-smoke-v4 \
-  --dataset.root=data/litearm-hand-guide-smoke-v4 \
+  --dataset.repo_id=local/litearm-hand-guide-smoke-v5 \
+  --dataset.root=data/litearm-hand-guide-smoke-v5\
   --dataset.single_task='抓取方块并放在另一边' \
   --dataset.fps=30 \
   --dataset.episode_time_s=10 \

@@ -166,9 +166,9 @@ print("unique states:", len(np.unique(np.round(observation, 6), axis=0)))
 print("per-joint range:", np.round(observation.max(0) - observation.min(0), 4))
 print("finite:", np.isfinite(observation).all() and np.isfinite(action).all())
 print(
-    "max arm pairing error:",
+    "max pairing error:",
     max(
-        np.abs(action[start:stop - 1, :7] - observation[start + 1:stop, :7]).max()
+        np.abs(action[start:stop - 1] - observation[start + 1:stop]).max()
         for start, stop in bounds
         if stop - start > 1
     ),
@@ -181,12 +181,9 @@ PY
 ```
 
 只有当数据集能重新打开、报告 30 Hz、包含有限的 `(N, 7)` 或 `(N, 8)` 状态与动作
-数组，并且视频与物理任务相符时，才算通过。机械臂部分的配对误差应接近零，因为
-`action[t, :7]` 就是 `observation.state[t+1, :7]`。
-
-夹爪列按设计不同：`action[t, 7]` 是当拍下发的目标（张开端点、闭合零点或保持），
-不是下一拍的实测开口，通常只在两个常量之间取值。不要期望它等于
-`observation.state[t+1, 7]`。
+数组，并且视频与物理任务相符时，才算通过。配对误差应接近零，因为每一列都满足
+`action[t]` 等于 `observation.state[t+1]`，启用夹爪时包括 `gripper.pos`。因此
+夹爪动作在运动过程中是连续的，而不是下发的目标值。
 
 配对误差必须**按 episode 分别检查**。每个 episode 的最后一帧在本 episode 内没有
 未来动作，它的 `action` 就是该 episode 的最后一个实测状态。若对整个数据集直接用
