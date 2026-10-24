@@ -89,6 +89,50 @@ def test_loop_pairs_q_t_with_q_t_plus_one_and_drops_last(monkeypatch):
     assert not samples
 
 
+def test_loop_pairs_the_gripper_opening_like_a_joint(monkeypatch):
+    samples = [
+        KinestheticSample({"gripper.pos": 10.0}, {"gripper.pos": 10.0}),
+        KinestheticSample({"gripper.pos": 12.5}, {"gripper.pos": 12.5}),
+    ]
+
+    class SequenceRobot:
+        def capture_sample(self):
+            return samples.pop(0)
+
+    class Dataset:
+        fps = 30
+
+    paired = []
+    monkeypatch.setattr(
+        recording,
+        "_add_paired_frame",
+        lambda dataset, observation, action, task: paired.append(
+            (observation, action, task)
+        ),
+    )
+    clock = {"now": 0.0}
+    monkeypatch.setattr(recording.time, "perf_counter", lambda: clock["now"])
+    monkeypatch.setattr(
+        recording,
+        "precise_sleep",
+        lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
+    )
+
+    frames = recording.record_kinesthetic_loop(
+        SequenceRobot(),
+        {"exit_early": False},
+        dataset=Dataset(),
+        control_time_s=0.05,
+        task="hand guide",
+    )
+
+    assert frames == 1
+    assert paired[0][0]["gripper.pos"] == 10.0
+    # action[t] is the opening measured at t+1, not a commanded endpoint.
+    assert paired[0][1]["gripper.pos"] == 12.5
+    assert not samples
+
+
 def test_loop_applies_gripper_keys_after_sampling(monkeypatch):
     class Robot:
         def __init__(self):

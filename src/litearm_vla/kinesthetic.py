@@ -579,8 +579,11 @@ class KinestheticRobot(LiteArmRobot):
         observation: RobotObservation = dict(joint_values)
         candidate: RobotAction = dict(joint_values)
         if gripper_sample is not None:
+            # The gripper follows the same q[t+1] rule as the arm: this
+            # sample's measured opening becomes the paired frame's action, so
+            # the recorded action stays continuous while the jaws move.
             observation[GRIPPER_FEATURE] = gripper_sample.position_mm
-            candidate[GRIPPER_FEATURE] = gripper_sample.target_mm
+            candidate[GRIPPER_FEATURE] = gripper_sample.position_mm
         for name, camera in self.cameras.items():
             observation[name] = camera.read_latest()
         return KinestheticSample(

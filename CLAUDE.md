@@ -25,9 +25,9 @@ for contributors working on LiteArm VLA data collection.
   `litearm-vr-follow`, LiteArm Studio, or another robot controller at the same
   time.
 - The recorder supports a seven-joint arm and an optional keyboard-driven
-  LiteGrip. Record the gripper action as the target actually commanded (open
-  endpoint, closed stop, or a hold command), never as a value inferred from
-  measured position or a sentinel.
+  LiteGrip. Record the gripper opening with the same rule as the arm joints:
+  `action[t]` is the next measured opening. Never invent a gripper action from
+  a commanded target or a sentinel.
 
 ## Data contract
 

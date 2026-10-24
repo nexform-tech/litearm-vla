@@ -53,7 +53,7 @@ def test_gripper_disabled_keeps_the_arm_only_contract(fake_arm, tmp_path):
     robot.disconnect()
 
 
-def test_gripper_enabled_adds_features_and_command_action(
+def test_gripper_enabled_adds_features_and_measured_action(
     fake_arm, fake_gripper, tmp_path
 ):
     robot = KinestheticRobot(_config(tmp_path))
@@ -68,14 +68,39 @@ def test_gripper_enabled_adds_features_and_command_action(
 
     sample = robot.capture_sample()
     assert sample.observation["gripper.pos"] == pytest.approx(20.0)
-    # Before the first key press the command is a hold at the measured opening.
+    # The gripper follows the arm's q[t+1] rule: this sample's measured
+    # opening becomes the paired frame's action.
     assert sample.future_action_candidate["gripper.pos"] == pytest.approx(20.0)
+    assert sample.future_action_candidate == sample.observation
 
     robot.disconnect()
     names = _event_names(gripper.events)
     assert names.index("connect") < names.index("enable")
     assert names[-1] == "disconnect"
     assert "stop" in names
+
+
+def test_action_is_the_opening_measured_next_not_the_commanded_target(
+    fake_arm, fake_gripper, tmp_path
+):
+    robot = KinestheticRobot(_config(tmp_path))
+    robot.connect()
+    gripper = fake_gripper.instances[-1]
+
+    # A commanded endpoint must not leak into the action. While the jaws are
+    # between positions the recorded action tracks the measurement, so the
+    # gripper column stays continuous instead of jumping between 0 and 80.
+    gripper.state.position_mm = 37.5
+    sample = robot.capture_sample()
+    assert sample.observation["gripper.pos"] == pytest.approx(37.5)
+    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(37.5)
+
+    gripper.state.position_mm = 38.2
+    assert robot.capture_sample().future_action_candidate["gripper.pos"] == (
+        pytest.approx(38.2)
+    )
+
+    robot.disconnect()
 
 
 def test_idle_session_streams_hold_frames_before_the_first_key(
@@ -103,17 +128,29 @@ def test_keys_request_open_and_close(fake_arm, fake_gripper, tmp_path):
     robot.apply_keyboard_events(events)
     assert "gripper_open" not in events
     assert _wait_for(gripper.events, "open")
-    assert robot.capture_sample().future_action_candidate["gripper.pos"] == pytest.approx(
-        80.0
-    )
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        sample = robot.capture_sample()
+        if sample.observation["gripper.pos"] == pytest.approx(80.0):
+            break
+        time.sleep(0.005)
+    else:
+        pytest.fail("the open command did not move the fake jaws")
+    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(80.0)
 
     events = {"gripper_close": True}
     robot.apply_keyboard_events(events)
     assert "gripper_close" not in events
     assert _wait_for(gripper.events, "grasp")
-    assert robot.capture_sample().future_action_candidate["gripper.pos"] == pytest.approx(
-        0.0
-    )
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        sample = robot.capture_sample()
+        if sample.observation["gripper.pos"] == pytest.approx(0.0):
+            break
+        time.sleep(0.005)
+    else:
+        pytest.fail("the close command did not move the fake jaws")
+    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(0.0)
 
     robot.disconnect()
 
@@ -194,7 +231,14 @@ def test_grasp_retries_a_slice_that_ends_in_free_travel(
         time.sleep(0.005)
     assert calls >= 2, "a free-travel slice did not start another close ramp"
 
-    sample = robot.capture_sample()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        sample = robot.capture_sample()
+        if sample.observation["gripper.pos"] == pytest.approx(0.0):
+            break
+        time.sleep(0.005)
+    else:
+        pytest.fail("the retried grasp did not close the fake jaws")
     assert sample.future_action_candidate["gripper.pos"] == pytest.approx(0.0)
     robot.assert_safe()
     robot.disconnect()
@@ -228,17 +272,25 @@ def test_persistent_grasp_failure_holds_position_and_keeps_the_session(
     robot.apply_keyboard_events({"gripper_close": True})
 
     deadline = time.monotonic() + 1.0
+    while calls < 3 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert calls == 3, "the grasp did not exhaust its retries"
+
+    # No hold frames are sent while a grasp slice runs. A new ``mit`` event
+    # proves the worker resumed the hold stream instead of stopping with a
+    # controller error, and that the failed command has been cleared.
+    mits_after_failure = _event_names(gripper.events).count("mit")
+    deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline:
-        sample = robot.capture_sample()
-        if sample.future_action_candidate["gripper.pos"] == pytest.approx(42.0):
+        if _event_names(gripper.events).count("mit") > mits_after_failure:
             break
         time.sleep(0.005)
     else:
         pytest.fail("a failed grasp did not fall back to a position hold")
 
-    # The slice was retried before giving up, then the worker stayed alive.
-    assert calls == 3
+    sample = robot.capture_sample()
     assert sample.observation["gripper.pos"] == pytest.approx(42.0)
+    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(42.0)
     robot.assert_safe()
 
     # A new close press must restart the grasp, not be swallowed as an
@@ -248,13 +300,12 @@ def test_persistent_grasp_failure_holds_position_and_keeps_the_session(
     deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline:
         sample = robot.capture_sample()
-        if calls >= 4 and sample.future_action_candidate["gripper.pos"] == pytest.approx(
-            0.0
-        ):
+        if calls >= 4 and sample.observation["gripper.pos"] == pytest.approx(0.0):
             break
         time.sleep(0.005)
     else:
         pytest.fail("the failed grasp command was not cleared for a retry")
+    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(0.0)
 
     robot.disconnect()
 
@@ -298,6 +349,7 @@ def test_grasp_excursion_inside_the_sdk_hold_guard_is_accepted(
     gripper.state.position_mm = -2.5
     sample = robot.capture_sample()
     assert sample.observation["gripper.pos"] == pytest.approx(-2.5)
+    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(-2.5)
 
     # Beyond the configured margin is still a fault.
     gripper.state.position_mm = -5.0
