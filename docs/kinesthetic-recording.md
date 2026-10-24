@@ -10,13 +10,14 @@ Work from `/home/yd/wl/VLA/litearm-vla` in the
 `litearm-lerobot` Conda environment:
 
 ```bash
-python -c 'import lerobot, litearm, litearm_lerobot; print(lerobot.__version__, litearm.__version__)'
+python -c 'import lerobot, litearm, litearm_lerobot, litegrip; print(lerobot.__version__, litearm.__version__, litegrip.__file__)'
 PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
   python -m pytest tests/ -q -p no:cacheprovider -rs
 ```
 
-Expected versions are LeRobot `0.4.4` and litearm-python `2.1.0`. All offline
-tests must pass before hardware work.
+Expected versions are LeRobot `0.4.4` and litearm-python `2.1.0`. `litegrip` is
+installed from commit `0d46d6d`; the adapter relies on its stale-status fields
+(`fresh` / `data_age_s`). All offline tests must pass before hardware work.
 
 ## 2. Prepare the hardware
 
@@ -48,7 +49,31 @@ tests must pass before hardware work.
    unplug and replug the camera to power-cycle it; a software USB reset does not
    recover it. Do not run a tool that kills camera owners automatically.
 
-5. Put the arm inside its firmware limits before the recorder starts. The
+5. If the gripper is enabled, bring up its separate CAN link and confirm the
+   calibrated travel before the session:
+
+   ```bash
+   sudo ip link set can0 type can bitrate 1000000
+   sudo ip link set can0 up
+   python - <<'PY'
+   from litegrip import LiteGrip
+
+   with LiteGrip("can0") as gripper:
+       assert gripper.load_calibration()
+       assert gripper.enable().ok
+       print("calibrated:", gripper.config.calibrated)
+   PY
+   ```
+
+   `can0` must be exclusive to this process. `ip -details link show can0` must
+   report `state UP` and `can state ERROR-ACTIVE`; a down interface still
+   connects, but every transmit fails with `[Errno 100] Network is down`. A
+   `False` calibration means the factory file is for another channel or the
+   unit needs a template/file; see the README. Do not continue on placeholder
+   limits. A no-argument load reads only the shipped factory file — pass
+   `--robot.gripper.calibration_file` when the unit has its own calibration.
+
+6. Put the arm inside its firmware limits before the recorder starts. The
    recorder checks every joint against the limits minus a 0.01 rad margin while
    the arm is still disabled, and a limp arm sags out of range — J4 has only
    about 0.0175 rad of positive travel. Home the arm through the SDK and leave
@@ -100,6 +125,17 @@ The command enters zero-gravity within a few seconds of starting. Announce it,
 stand next to the arm, and actually drag the arm during the episode; a
 zero-gravity arm is easy to move but never moves by itself.
 
+With `--robot.gripper.enabled=true`, press `o` to open and `c` to close and
+hold. The first `o`/`c` goes to the calibrated endpoint; a new press interrupts
+a running grasp within one slice (`grasp_hold_s`, 0.2 s by default). The
+gripper is opened before the dataset is created, and its session joins the same
+safety monitor as the arm.
+
+`--robot.payload_kg=0.62` sets the tool mass in the firmware's gravity
+feed-forward before enable and verifies it by readback. `set_payload()` also
+writes the centre of mass, so the default `payload_com=(0, 0, 0)` clears any
+stored offset. The write is RAM-only.
+
 A latched fault blocks the run. Any of `FAULT`, `POS_VIOL`, `FB_STALE`, or
 `joint_fault` makes `robot.connect()` raise before the arm is energized. The
 README command passes `--robot.auto_clear_faults=true`, which clears a fault
@@ -116,8 +152,8 @@ either way.
 
 The process creates the dataset only after CDC connection, firmware-limit
 reads, a disabled-pose safety check, immediate zero-gravity entry after enable,
-zero-gravity confirmation, safety-monitor startup, and camera connection all
-succeed. The immediate handoff is required because the firmware command
+zero-gravity confirmation, gripper connection (when enabled), safety-monitor
+startup, and camera connection all succeed. The immediate handoff is required because the firmware command
 watchdog starts when the arm is enabled.
 
 The safety monitor remains active while LeRobot saves and encodes an episode.
@@ -155,19 +191,29 @@ print("unique states:", len(np.unique(np.round(observation, 6), axis=0)))
 print("per-joint range:", np.round(observation.max(0) - observation.min(0), 4))
 print("finite:", np.isfinite(observation).all() and np.isfinite(action).all())
 print(
-    "max pairing error:",
+    "max arm pairing error:",
     max(
-        np.abs(action[start:stop - 1] - observation[start + 1:stop]).max()
+        np.abs(action[start:stop - 1, :7] - observation[start + 1:stop, :7]).max()
         for start, stop in bounds
         if stop - start > 1
     ),
 )
+if observation.shape[1] > 7:
+    print("gripper opening range:", np.round(
+        observation[:, 7].max() - observation[:, 7].min(), 2
+    ), "mm")
 PY
 ```
 
-Pass only when the dataset reopens, reports 30 Hz, contains finite `(N, 7)`
-state and action arrays, and the video matches the physical task. The pairing
-error should be near zero because `action[t]` is `observation.state[t+1]`.
+Pass only when the dataset reopens, reports 30 Hz, contains finite `(N, 7)` or
+`(N, 8)` state and action arrays, and the video matches the physical task. The
+arm pairing error should be near zero because `action[t, :7]` is
+`observation.state[t+1, :7]`.
+
+The gripper column is different by design: `action[t, 7]` is the target
+commanded at that sample (open endpoint, closed stop, or hold), not the next
+measured opening. It is usually one of two constants. Do not expect it to match
+`observation.state[t+1, 7]`.
 
 Check pairing **within each episode**. The last frame of an episode has no
 future action in that episode, so its `action` is the episode's final measured

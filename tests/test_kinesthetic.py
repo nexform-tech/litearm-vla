@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -65,6 +66,61 @@ def test_connect_reuses_base_driver_and_starts_zero_gravity(fake_arm, tmp_path):
     robot.disconnect()
     assert any(isinstance(event, tuple) and event[0] == "movej" for event in arm.events)
     assert arm.events[-1] == "close"
+
+
+def test_payload_is_written_before_enable_and_verified(fake_arm, tmp_path):
+    robot = KinestheticRobot(
+        _config(tmp_path, payload_kg=0.62, payload_com=(0.0, 0.0, 0.01))
+    )
+    robot.connect()
+    arm = fake_arm.instances[-1]
+
+    assert arm.payload_mass == pytest.approx(0.62)
+    assert arm.payload_com == pytest.approx([0.0, 0.0, 0.01])
+    names = _event_names(arm)
+    zero_g_index = next(
+        index
+        for index, event in enumerate(arm.events)
+        if isinstance(event, tuple) and event[0] == "zero_g_start"
+    )
+    assert names.index("set_payload") < names.index("enable") < zero_g_index
+
+    robot.disconnect()
+
+
+def test_payload_readback_mismatch_fails_closed(fake_arm, monkeypatch, tmp_path):
+    original_get_ff_scalar = fake_arm.get_ff_scalar
+
+    def wrong_readback(self, item, sub=0, timeout=1.0):
+        if item == 4:
+            return SimpleNamespace(value=0.0, timestamp=time.monotonic())
+        return original_get_ff_scalar(self, item, sub, timeout)
+
+    monkeypatch.setattr(fake_arm, "get_ff_scalar", wrong_readback)
+    robot = KinestheticRobot(_config(tmp_path, payload_kg=0.62))
+
+    with pytest.raises(SafetyError, match="payload readback"):
+        robot.connect()
+
+    arm = fake_arm.instances[-1]
+    assert "set_payload" in _event_names(arm)
+    assert "enable" not in arm.events
+    assert arm.events[-1] == "close"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"payload_kg": -1.0}, "payload_kg"),
+        ({"payload_kg": 21.0}, "payload_kg"),
+        ({"payload_kg": float("nan")}, "payload_kg"),
+        ({"payload_com": (0.0, 0.0)}, "payload_com"),
+        ({"payload_com": (2.0, 0.0, 0.0)}, "payload_com"),
+    ],
+)
+def test_invalid_payload_config_is_rejected(tmp_path, kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        _config(tmp_path, **kwargs).validate()
 
 
 def test_connect_does_not_poll_state_between_enable_and_zero_gravity(

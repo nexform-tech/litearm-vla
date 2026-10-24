@@ -17,11 +17,16 @@ litearm-lerobot (Robot 生命周期与固件限位)
 litearm-python (USB CDC 与零重力保活)
 ```
 
+可选的夹爪链路是独立的：`litearm_vla.gripper` → `litegrip-python` → SocketCAN。
+它复用录制程序的安全监控，但不占用机械臂的 USB CDC 链路。
+
 ## 数据契约
 
-- 七个机械臂关节，首版不包含夹爪。
-- `observation.state[t]` 是测得的关节向量 `q[t]`。
-- `action[t]` 是下一拍测得的向量 `q[t+1]`。
+- 七个机械臂关节。LiteGrip 夹爪可选，默认关闭。
+- `observation.state[t]` 是测得的关节向量 `q[t]`；启用夹爪时还包含
+  `gripper.pos`（单位毫米）。
+- `action[t]` 对机械臂是下一拍测得的向量 `q[t+1]`；对夹爪是当拍下发的目标
+  `gripper.pos`——张开端点、闭合零点 `0`，或连接时保持的实测开口。
 - 每条 episode 的最后一个观测被丢弃，因为它没有对应的后续动作。
 - 录制固定为 30 Hz，采样率不达标的 episode 会被丢弃。
 - 相机、数据集特征、视频编码、episode 保存、续录、重录控制以及可选的 Hub
@@ -42,7 +47,14 @@ PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
   python -m pytest tests/ -q -p no:cacheprovider -rs
 ```
 
-测试会伪造机械臂和相机。它们不会打开串口、相机、CAN 或网络机器人设备。
+`litegrip` 尚未发布到 PyPI，因此 `litearm-vla` 从上游 Git commit 安装夹爪 SDK：
+
+```bash
+python -m pip install \
+  "git+https://github.com/nexform-tech/litegrip-python.git@0d46d6d8c598c0caa1ca863748dffb0328d5b80e"
+```
+
+测试会伪造机械臂、相机和夹爪。它们不会打开串口、相机、CAN 或网络机器人设备。
 
 ## 硬件预检
 
@@ -103,6 +115,36 @@ arm.close()            # close() 只关链路，不会失能
 `Arm.home()` 允许从贴着软限位的位置起步；保持使能后，录制程序会跳过
 `enable()` 直接进入零重力。**不要用失能来"停放"机械臂**：它会下垂并掉出限位。
 
+### 夹爪 CAN 链路
+
+LiteGrip 走 SocketCAN，不占用机械臂的 USB CDC。每次会话前把接口以 1 Mbit/s 拉起，
+并保证本进程独占：
+
+```bash
+sudo ip link set can0 type can bitrate 1000000
+sudo ip link set can0 up
+ip -details link show can0
+```
+
+然后在不移动夹爪的前提下检查标定和使能路径：
+
+```bash
+python - <<'PY'
+from litegrip import LiteGrip
+
+with LiteGrip("can0") as gripper:
+    print("calibration:", gripper.load_calibration())
+    print("travel mm:", abs(gripper.config.pos_open_rad - gripper.config.pos_closed_rad)
+          * gripper.config.rad_to_mm)
+    print("enabled:", gripper.enable().ok)
+PY
+```
+
+如果 `load_calibration()` 返回 `False`，说明出厂标定文件对应的是别的通道（文件里
+写死 `can0`），或本机标定缺失；非标准安装方向请传
+`--robot.gripper.mount=reverse`，或通过 `--robot.gripper.calibration_file` 指定
+文件。**不要**在占位限位上开始录制。
+
 ## 录制
 
 在 `litearm-vr-follow`、LiteArm Studio 以及所有其他机械臂控制器停止之前，不要
@@ -117,9 +159,12 @@ litearm-vla-record \
   --robot.auto_enable=true \
   --robot.auto_clear_faults=true \
   --robot.ignored_flags='["WD_TRIPPED"]' \
+  --robot.payload_kg=0.62 \
+  --robot.gripper.enabled=true \
+  --robot.gripper.channel=can0 \
   --robot.cameras='{wrist: {type: opencv, index_or_path: /dev/video4, width: 640, height: 480, fps: 30}}' \
-  --dataset.repo_id=local/litearm-hand-guide-smoke-v2 \
-  --dataset.root=data/litearm-hand-guide-smoke-v2 \
+  --dataset.repo_id=local/litearm-hand-guide-smoke-v4 \
+  --dataset.root=data/litearm-hand-guide-smoke-v4 \
   --dataset.single_task='抓取方块并放在另一边' \
   --dataset.fps=30 \
   --dataset.episode_time_s=10 \
@@ -130,18 +175,36 @@ litearm-vla-record \
   --play_sounds=false
 ```
 
-`auto_enable` 默认为 `false`。将其设为 `true` 即明确请求为机械臂上电。进程会独占
+`auto_enable` 默认为 `false`。将其设为 `true` 即明确请求为机械臂上电。
+`--robot.gripper.enabled=true` 则是夹爪的对应开关：它会在创建数据集之前打开 CAN
+链路、加载标定并使能夹爪电机。
+
+`--robot.payload_kg=0.62` 会在使能机械臂之前把末端负载质量写入固件的重力前馈，
+然后用 `get_ff_scalar()` 读回 item 4 校验；读回值与请求值不一致就故障关闭。该写入
+只改 RAM；如需掉电保留，请自行调用 `Arm.save_params()`。`set_payload()` 同时会写
+质心，所以 `--robot.payload_com` 默认为 `(0, 0, 0)`；工具不在法兰处平衡时请传入
+实测偏移。
+
+进程会独占
 打开机械臂，校验最新反馈与固件限位，进入一次零重力模式，并在录制、复位、丢弃和
 保存各阶段保持该模式有效。
 
 - 右方向键：提前结束当前录制或复位阶段。
 - 左方向键：丢弃当前 episode 并重录。
 - Esc：结束会话、finalize 数据集、退出零重力、保持实测姿态，然后关闭 USB CDC。
+- `o`：张开夹爪（`--robot.gripper.open_key`）。
+- `c`：闭合夹爪并用 `grasp()` 保持夹持力（`--robot.gripper.close_key`，力由
+  `--robot.gripper.grasp_force_n` 指定）。
 
 正常退出会停止零重力、校验新的安全状态、执行**零位移 `movej` 交接**、再关闭
 链路；它**不会失能**，所以机械臂会保持使能并停在实测姿态。发生安全故障时走同一条
 路径：停止零重力并由固件保持实测姿态。本程序**不会**触发急停或失能机械臂；物理
 急停仍然是唯一的应急手段。
+
+夹爪遵循 SDK 的生命周期：移动之间由后台线程持续发送零位移保持帧；退出时先发零力矩
+帧，再关闭 CAN 会话（这会失能电机）。因此**夹爪会在进程退出时松开**，不要指望它
+在会话结束后继续夹住工件。键盘控制需要图形会话；启用
+`--robot.gripper.enabled=true` 时，无显示环境会在打开任何设备之前直接报错退出。
 
 有关分阶段硬件准入与数据集检查，请参阅[录制指南](docs/kinesthetic-recording.zh-CN.md)。
 
@@ -163,6 +226,28 @@ litearm-vla-record \
 机械臂**失能**时执行，会记录清除了什么，然后重新做完整的安全检查；使能状态下绝不
 清除。如果物理原因仍在，故障会立即重新锁存。使能时反复出现不同关节的 `FB_STALE`，
 指向 CAN 侧问题：检查电机线缆并重新给机械臂上电。
+
+**夹爪使能失败，报 `[Errno 100] Network is down`。** SocketCAN 接口存在但处于
+管理性 DOWN 状态。`LiteGrip.connect()` 能在 DOWN 接口上打开原始套接字，但第一次
+发送就失败，于是 `enable()` 重试 3 次后返回 `err=0`。先把接口拉起：
+
+```bash
+sudo ip link set can0 type can bitrate 1000000
+sudo ip link set can0 up
+ip -details link show can0
+```
+
+必须看到 `state UP` 和 `can state ERROR-ACTIVE`。如果接口再次掉线，用 `dmesg`
+检查 USB CAN 适配器（`gs_usb`）、线缆和 120 Ω 总线终端电阻。
+
+**夹爪没有使用本地标定。** 无参 `load_calibration()` 只读 SDK 自带的出厂标定；
+SDK 刻意不会自动拾取 `~/.litegrip/can0_08_calibration.json`。请显式传入：
+
+```bash
+--robot.gripper.calibration_file=/home/yd/.litegrip/can0_08_calibration.json
+```
+
+或在会话中设置 `LITEGRIP_CALIB`。只有在该单元确实就是出厂正装配置时才用出厂标定。
 
 **episode 是静止的。** 数据集检查里的 `unique rows: 1` 表示整个录制期间机械臂根本
 没被拖动过。零重力下很容易拖动，但它不会自己动。

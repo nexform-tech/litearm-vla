@@ -20,6 +20,8 @@ from lerobot.processor import RobotAction, RobotObservation
 from lerobot.robots.config import RobotConfig
 from litearm_lerobot import LiteArmRobot, LiteArmRobotConfig
 
+from .gripper import GRIPPER_FEATURE, LiteGripController, LiteGripOptions
+
 RECORD_FPS = 30
 DEFAULT_JOINT_NAMES = tuple(f"joint{i}" for i in range(1, 8))
 
@@ -78,7 +80,17 @@ class KinestheticRobotConfig(LiteArmRobotConfig):
     disable_on_disconnect: bool = field(default=False, init=False, repr=False)
 
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
+    #: Optional keyboard-driven LiteGrip. Disabled by default so the arm-only
+    #: workflow never opens a CAN interface.
+    gripper: LiteGripOptions = field(default_factory=LiteGripOptions)
     joint_names: tuple[str, ...] = DEFAULT_JOINT_NAMES
+    #: Tool payload mass in kg for the firmware's gravity feed-forward. ``None``
+    #: leaves the firmware value alone. The write is RAM-only: run
+    #: ``Arm.save_params()`` yourself if the value should survive a power cycle.
+    payload_kg: float | None = None
+    #: Payload centre of mass in metres, one per axis. ``set_payload()`` always
+    #: writes this, so the default clears any previously stored offset.
+    payload_com: tuple[float, float, float] = (0.0, 0.0, 0.0)
     auto_enable: bool = False
     zero_g_period_s: float = 0.04
     feedback_timeout_s: float = 0.25
@@ -106,9 +118,11 @@ class KinestheticRobotConfig(LiteArmRobotConfig):
         super().__post_init__()
         self.joint_names = tuple(self.joint_names)
         self.ignored_flags = _normalize_flag_names(self.ignored_flags)
+        self.payload_com = tuple(float(value) for value in self.payload_com)
 
     def validate(self) -> None:
         super().validate()
+        self.gripper.validate()
         if self.num_joints != 7 or len(self.joint_names) != self.num_joints:
             raise ValueError("kinesthetic collection requires seven named joints")
         if len(set(self.joint_names)) != len(self.joint_names):
@@ -130,6 +144,19 @@ class KinestheticRobotConfig(LiteArmRobotConfig):
         if unknown:
             raise ValueError(
                 f"unknown ignored_flags {unknown}; expected names from {KNOWN_FLAG_NAMES}"
+            )
+        if self.payload_kg is not None:
+            if (
+                not math.isfinite(self.payload_kg)
+                or not 0.0 <= self.payload_kg <= 20.0
+            ):
+                raise ValueError("payload_kg must be finite and in [0, 20] kg")
+        if len(self.payload_com) != 3 or any(
+            not math.isfinite(value) or not -1.0 <= value <= 1.0
+            for value in self.payload_com
+        ):
+            raise ValueError(
+                "payload_com must contain three finite values in [-1, 1] m"
             )
         for name, camera in self.cameras.items():
             if int(camera.fps) < RECORD_FPS:
@@ -166,6 +193,7 @@ class _SafetyMonitor:
         while not self._stop.wait(self._robot.config.monitor_period_s):
             try:
                 self._robot._read_safe_state(refresh=False, require_zero_g=True)
+                self._robot._assert_gripper_safe()
             except BaseException as exc:  # noqa: BLE001 - preserve the safety cause
                 self.error = exc
                 self._robot._fail_into_hold(exc)
@@ -192,6 +220,9 @@ class KinestheticRobot(LiteArmRobot):
         super().__init__(config)
         self.config = config
         self.cameras = make_cameras_from_configs(config.cameras)
+        self._gripper = (
+            LiteGripController(config.gripper) if config.gripper.enabled else None
+        )
         self._monitor: _SafetyMonitor | None = None
         self._trip_lock = threading.Lock()
         self._fail_closed = False
@@ -200,6 +231,11 @@ class KinestheticRobot(LiteArmRobot):
     @property
     def _joint_features(self) -> dict[str, type]:
         return {f"{name}.pos": float for name in self.config.joint_names}
+
+    @property
+    def gripper(self) -> LiteGripController | None:
+        """The optional keyboard-driven gripper controller."""
+        return self._gripper
 
     @property
     def observation_features(self) -> dict[str, type | tuple]:
@@ -211,15 +247,25 @@ class KinestheticRobot(LiteArmRobot):
             )
             for name in self.cameras
         }
-        return {**self._joint_features, **camera_features}
+        gripper_features = (
+            {GRIPPER_FEATURE: float} if self._gripper is not None else {}
+        )
+        return {**self._joint_features, **gripper_features, **camera_features}
 
     @property
     def action_features(self) -> dict[str, type]:
-        return self._joint_features
+        gripper_features = (
+            {GRIPPER_FEATURE: float} if self._gripper is not None else {}
+        )
+        return {**self._joint_features, **gripper_features}
 
     @property
     def is_connected(self) -> bool:
-        return self._arm is not None and all(camera.is_connected for camera in self.cameras.values())
+        return (
+            self._arm is not None
+            and all(camera.is_connected for camera in self.cameras.values())
+            and (self._gripper is None or self._gripper.is_connected)
+        )
 
     def _read_safe_state(
         self,
@@ -296,6 +342,44 @@ class KinestheticRobot(LiteArmRobot):
             )
         return state
 
+    def _apply_payload(self, mass: float) -> None:
+        """Write the tool payload and verify the firmware kept the value.
+
+        The firmware silently clamps ``payload_mass`` to [0, 20] and still
+        ACKs, so the readback is the only evidence that the write took effect.
+        """
+        arm = self._arm
+        if arm is None:
+            raise SafetyError("cannot set the payload without a connected arm")
+        arm.set_payload(float(mass), tuple(self.config.payload_com))
+        try:
+            readback = arm.get_ff_scalar(4, 0).value
+        except BaseException as exc:  # noqa: BLE001 - fail closed on no readback
+            raise SafetyError(f"cannot verify the LiteArm payload: {exc}") from exc
+        if (
+            readback is None
+            or not math.isfinite(float(readback))
+            or abs(float(readback) - mass) > 1e-3
+        ):
+            raise SafetyError(
+                f"LiteArm payload readback {readback!r} kg does not match "
+                f"the requested {mass:.3f} kg"
+            )
+        log.info(
+            "LiteArm payload set to %.3f kg at com=%s m (readback %.3f kg)",
+            mass,
+            self.config.payload_com,
+            float(readback),
+        )
+
+    def _assert_gripper_safe(self) -> None:
+        if self._gripper is None:
+            return
+        try:
+            self._gripper.assert_safe()
+        except BaseException as exc:  # noqa: BLE001 - preserve the gripper cause
+            raise SafetyError(f"LiteGrip: {exc}") from exc
+
     def connect(self, calibrate: bool = True) -> None:
         if self._arm is not None:
             return
@@ -324,16 +408,25 @@ class KinestheticRobot(LiteArmRobot):
                     require_zero_g=False,
                     require_enabled=False,
                 )
+            if not state.enabled and not self.config.auto_enable:
+                raise SafetyError(
+                    "LiteArm is disabled; pass --robot.auto_enable=true only after "
+                    "the low-risk hardware checks"
+                )
+            # Write the payload while the arm is still disabled when possible:
+            # item 4/5 are feed-forward parameters, not motion commands.
+            if self.config.payload_kg is not None:
+                self._apply_payload(self.config.payload_kg)
             if not state.enabled:
-                if not self.config.auto_enable:
-                    raise SafetyError(
-                        "LiteArm is disabled; pass --robot.auto_enable=true only after "
-                        "the low-risk hardware checks"
-                    )
                 self._arm.enable()
             self._arm.zero_g_start(period=self.config.zero_g_period_s)
             self._read_safe_state(refresh=True, require_zero_g=True)
 
+            # Start the gripper before the monitor so its first check always has
+            # a session to check, and before any camera so a CAN failure does
+            # not leave video devices open.
+            if self._gripper is not None:
+                self._gripper.connect()
             self._monitor = _SafetyMonitor(self)
             self._monitor.start()
             for camera in self.cameras.values():
@@ -342,6 +435,11 @@ class KinestheticRobot(LiteArmRobot):
             if self._monitor is not None:
                 self._monitor.stop()
                 self._monitor = None
+            if self._gripper is not None:
+                try:
+                    self._gripper.disconnect()
+                except BaseException:  # noqa: BLE001 - the connect cause wins
+                    log.exception("Could not close LiteGrip after connect failure")
             for camera in reversed(tuple(self.cameras.values())):
                 if camera.is_connected:
                     try:
@@ -429,6 +527,11 @@ class KinestheticRobot(LiteArmRobot):
                 self._arm.zero_g_stop(raise_on_lost=False)
             except BaseException:  # noqa: BLE001 - still attempt the hold
                 log.exception("Could not stop zero-gravity before the hold hand-off")
+            if self._gripper is not None:
+                try:
+                    self._gripper.fail_safe(cause)
+                except BaseException:  # noqa: BLE001 - the arm hold still runs
+                    log.exception("Could not stop the LiteGrip after a safety error")
             self._hold_current_pose(self._arm)
 
     def _cleanup_arm_after_failure(self) -> None:
@@ -450,6 +553,7 @@ class KinestheticRobot(LiteArmRobot):
         self._monitor.raise_if_failed()
         try:
             self._read_safe_state(refresh=False, require_zero_g=True)
+            self._assert_gripper_safe()
         except BaseException as exc:  # noqa: BLE001
             self._fail_into_hold(exc)
             raise
@@ -463,15 +567,39 @@ class KinestheticRobot(LiteArmRobot):
         except BaseException as exc:  # noqa: BLE001
             self._fail_into_hold(exc)
             raise
+        gripper_sample = None
+        if self._gripper is not None:
+            try:
+                gripper_sample = self._gripper.capture_state()
+            except BaseException as exc:  # noqa: BLE001
+                self._fail_into_hold(exc)
+                raise SafetyError(f"LiteGrip: {exc}") from exc
         values = tuple(float(value) for value in state.q)
         joint_values = dict(zip(self._joint_features, values, strict=True))
         observation: RobotObservation = dict(joint_values)
+        candidate: RobotAction = dict(joint_values)
+        if gripper_sample is not None:
+            observation[GRIPPER_FEATURE] = gripper_sample.position_mm
+            candidate[GRIPPER_FEATURE] = gripper_sample.target_mm
         for name, camera in self.cameras.items():
             observation[name] = camera.read_latest()
         return KinestheticSample(
             observation=observation,
-            future_action_candidate=dict(joint_values),
+            future_action_candidate=candidate,
         )
+
+    def apply_keyboard_events(self, events: dict[str, bool]) -> None:
+        """Apply latched gripper keys; a missing gripper makes this a no-op."""
+        if self._gripper is None:
+            return
+        try:
+            if events.pop("gripper_open", False):
+                self._gripper.request_open()
+            if events.pop("gripper_close", False):
+                self._gripper.request_close()
+        except BaseException as exc:  # noqa: BLE001 - same fail-closed path
+            self._fail_into_hold(exc)
+            raise SafetyError(f"LiteGrip: {exc}") from exc
 
     def get_observation(self) -> RobotObservation:
         return self.capture_sample().observation
@@ -486,8 +614,15 @@ class KinestheticRobot(LiteArmRobot):
             monitor.stop()
         monitor_error = monitor.error if monitor is not None else None
 
-        arm, self._arm = self._arm, None
         cleanup_error: BaseException | None = monitor_error
+        gripper, self._gripper = self._gripper, None
+        if gripper is not None:
+            try:
+                gripper.disconnect()
+            except BaseException as exc:  # noqa: BLE001 - still close the arm
+                cleanup_error = cleanup_error or exc
+
+        arm, self._arm = self._arm, None
         if arm is not None:
             try:
                 arm.zero_g_stop(raise_on_lost=True)
