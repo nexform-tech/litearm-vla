@@ -1,0 +1,161 @@
+[English](kinesthetic-recording.md) | 中文
+
+本指南帮助 LiteArm 操作员安全地验证并运行基于 LeRobot 的直接 30 Hz 动觉采集。
+
+# 直接手动引导录制
+
+## 1. 确认软件准入
+
+在 `litearm-lerobot` Conda 环境中，从 `/home/yd/wl/VLA/litearm-vla` 开始操作：
+
+```bash
+python -c 'import lerobot, litearm, litearm_lerobot; print(lerobot.__version__, litearm.__version__)'
+PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+  python -m pytest tests/ -q -p no:cacheprovider -rs
+```
+
+预期版本为 LeRobot `0.4.4` 和 litearm-python `2.1.0`。在进行硬件操作之前，所有
+离线测试都必须通过。
+
+## 2. 准备硬件
+
+1. 停止 `litearm-vr-follow`、LiteArm Studio 以及所有可能打开机械臂的其他进程。
+   录制程序必须是唯一的 CDC 占用者。
+2. 固定机械臂底座，卸下负载，清空工作空间，并让第二个人守在物理急停旁。
+3. 使用 SDK 的只读诊断功能确认全部七个关节都报告有限位置、无故障位、时间戳
+   新鲜，且电机和线圈温度处于合理范围。
+4. 确认所配置的相机正是预期的彩色节点。Intel RealSense D435i 的
+   `index_or_path: 0` 是深度流（`Z16`），不是彩色流：
+
+   ```bash
+   for d in /sys/class/video4linux/video*; do
+     echo "$(basename "$d"): $(cat "$d/device/interface")"
+   done
+   ```
+
+   把 `RGB` 节点以设备路径传入。确认相机接在 USB 3 上（`speed` 应为 `5000`），
+   并确认确实出帧：
+
+   ```bash
+   timeout 15 gst-launch-1.0 -q v4l2src device=/dev/video4 num-buffers=30 ! fakesink
+   echo "exit=$?"
+   ```
+
+   `exit=0` 表示有帧。如果节点存在但收不到帧，拔插相机给它断电重启；软件层的
+   USB reset 无法恢复。不要运行会自动杀掉相机占用进程的工具。
+
+5. 在启动录制之前，把机械臂放到固件限位以内。录制程序会在臂仍处于失能状态时，
+   按固件限位内缩 0.01 rad 逐轴检查；软塌的臂会掉出范围——J4 的正向行程只有约
+   0.0175 rad。请通过 SDK 回零并保持使能；`Arm.close()` 不会失能：
+
+   ```python
+   from litearm import Arm
+
+   arm = Arm(port="/dev/ttyACM0")
+   arm.connect()
+   if arm.get_state(refresh=True).value.enabled:
+       arm.disable()
+   state = arm.get_state(refresh=True).value
+   if state.flag_names or state.faulted:
+       arm.clear_faults()
+       state = arm.get_state(refresh=True).value
+       if state.faulted:
+           arm.reset()
+   arm.enable()
+   arm.home(timeout=60)
+   arm.close()
+   ```
+
+   已经使能的臂也可以：录制程序会跳过 `enable()` 直接进入零重力。
+
+不要仅凭 ACK 就继续操作。准入门槛要求新鲜的物理反馈和已知的急停路径。
+
+## 3. 单独验证零重力
+
+在录制之前，使用 litearm-python 公开的 `Arm.zero_g()` API 进行一次专门的低风险
+检查。保持行程小且慢。验证机械臂不会跳变、自走、过热，以及退出零重力时不会
+坠落。
+
+本仓库尚未自动执行该硬件检查。Python 测试无法证明真实的力补偿、摩擦、回差、
+负载行为或固件的退出交接。
+
+## 4. 录制一个冒烟 episode
+
+使用 README 中的命令，并设置 `episode_time_s=8`、`num_episodes=1` 和
+`push_to_hub=false`。仅当机械臂当前处于禁用状态时才需要
+`--robot.auto_enable=true`；这是一个明确的上电操作。如果机械臂已经使能且无故障
+（例如刚执行完 `home()`），录制程序会跳过使能、直接进入零重力。
+
+命令启动后几秒内就会进入零重力。请提前告知在场人员、站到臂旁，并在 episode
+期间**实际拖动机械臂**——零重力下它很容易被拖动，但它不会自己动。
+
+锁存故障会阻止运行。只要存在 `FAULT`、`POS_VIOL`、`FB_STALE` 或 `joint_fault`
+中的任何一项，`robot.connect()` 就会在使能之前抛错。README 中的命令带有
+`--robot.auto_clear_faults=true`，它会在重新执行安全检查之前，清除上一次故障关闭
+留下的锁存；只在机械臂**失能**时执行，使能状态下绝不清除。同时仍要排除物理原因；
+在使能状态下 `clear_faults()` 清不掉，因为命令看门狗会立刻重新触发。
+
+README 中的命令带有 `--robot.ignored_flags='["WD_TRIPPED"]'`，它把瞬态的命令看门狗
+触发记录为警告而不中断会话。去掉该参数即回到严格的故障关闭模式。无论是否加这个
+参数，其他故障位、温度与限位检查以及主机侧保活健康度仍然是致命的。
+
+只有在 CDC 连接、固件限位读取、失能姿态安全检查、使能后立即进入零重力、
+零重力确认、安全监控启动以及相机连接全部成功之后，进程才会创建数据集。
+使能后必须立即交接给零重力保活，因为固件命令看门狗会在使能时开始计时。
+
+LeRobot 保存并编码 episode 期间，安全监控保持活动。它检查反馈时效、使能状态、
+零重力保活、故障位、温度以及固件推导出的限位。一旦违反，就会停止零重力、执行
+零位移交接（机械臂保持使能）、关闭会话并报告原因。本程序不会触发急停或失能机械臂；
+如果机械臂无法稳定保持姿态，请使用物理急停。
+
+参考机上已观察到这一保存/编码阶段以 `WD_TRIPPED` 故障关闭，即使主机侧保活间隔
+始终低于 44 ms。请把这类故障当作真实故障，而不是偶发，并在重试前阅读 README 的
+故障排查一节。
+
+## 5. 检查数据集
+
+```bash
+python - <<'PY'
+from pathlib import Path
+import numpy as np
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+root = Path("data/litearm-hand-guide-smoke-v2")
+dataset = LeRobotDataset("local/litearm-hand-guide-smoke-v2", root=root)
+observation = np.asarray([dataset[i]["observation.state"] for i in range(len(dataset))])
+action = np.asarray([dataset[i]["action"] for i in range(len(dataset))])
+episodes = dataset.meta.episodes
+bounds = list(zip(episodes["dataset_from_index"], episodes["dataset_to_index"]))
+
+print("fps:", dataset.fps)
+print("episodes:", dataset.num_episodes)
+print("frames:", len(dataset))
+print("observation:", observation.shape, "action:", action.shape)
+print("unique states:", len(np.unique(np.round(observation, 6), axis=0)))
+print("per-joint range:", np.round(observation.max(0) - observation.min(0), 4))
+print("finite:", np.isfinite(observation).all() and np.isfinite(action).all())
+print(
+    "max pairing error:",
+    max(
+        np.abs(action[start:stop - 1] - observation[start + 1:stop]).max()
+        for start, stop in bounds
+        if stop - start > 1
+    ),
+)
+PY
+```
+
+只有当数据集能重新打开、报告 30 Hz、包含有限的 `(N, 7)` 状态与动作数组，并且
+视频与物理任务相符时，才算通过。配对误差应接近零，因为 `action[t]` 就是
+`observation.state[t+1]`。
+
+配对误差必须**按 episode 分别检查**。每个 episode 的最后一帧在本 episode 内没有
+未来动作，它的 `action` 就是该 episode 的最后一个实测状态。若对整个数据集直接用
+`action[:-1]` 对比 `observation[1:]`，会把上一 episode 的结尾与下一 episode 的开头
+配成一对，从而报出很大的误差——那不是数据契约违例。
+
+`unique states: 1`（以及逐关节行程全为 0）说明机械臂根本没动过：应当重录而不是
+保留这条 episode。静止录制同样会产出结构合法的数据集，所以只靠契约检查发现不了。
+
+不要把这个冒烟 episode 混入生产数据集。仅当已存在数据集且其机器人、相机、任务
+schema 和 30 Hz 契约都一致时，才使用 `--resume=true`。
