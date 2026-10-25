@@ -62,10 +62,8 @@ def init_gripper_keyboard_listener(
             return
         char = char.lower()
         if char == open_key:
-            log.info("Opening the gripper")
             events["gripper_open"] = True
         elif char == close_key:
-            log.info("Closing the gripper")
             events["gripper_close"] = True
 
     listener = keyboard.Listener(on_press=on_press)
@@ -88,6 +86,7 @@ class KinestheticRecordConfig:
     display_port: int | None = None
     display_compressed_images: bool = False
     play_sounds: bool = True
+    verbose_gripper_logs: bool = False
     resume: bool = False
 
     def __post_init__(self) -> None:
@@ -98,6 +97,36 @@ class KinestheticRecordConfig:
             raise ValueError(f"kinesthetic recording is fixed at {RECORD_FPS} Hz")
         if self.dataset.video and not self.robot.cameras:
             raise ValueError("dataset.video=true requires at least one configured camera")
+
+
+def _configure_gripper_logging(verbose: bool) -> None:
+    """Keep routine SDK messages from hiding the active collection phase.
+
+    Warnings and errors stay visible because they may indicate a communication,
+    calibration, motion, or safety problem. Operators can opt back into routine
+    SDK information when diagnosing the gripper.
+    """
+    logging.getLogger("litegrip").setLevel(logging.INFO if verbose else logging.WARNING)
+
+
+def _announce_recording_phase(
+    *, dataset_episode: int, session_episode: int, session_total: int, play_sounds: bool
+) -> None:
+    log_say(
+        f"[PHASE: RECORDING] Dataset episode {dataset_episode}; "
+        f"session {session_episode}/{session_total}; data capture ON",
+        play_sounds,
+    )
+
+
+def _announce_reset_phase(
+    *, dataset_episode: int, session_episode: int, session_total: int, play_sounds: bool
+) -> None:
+    log_say(
+        f"[PHASE: RESET] After dataset episode {dataset_episode}; "
+        f"session {session_episode}/{session_total}; data capture OFF",
+        play_sounds,
+    )
 
 
 def _add_paired_frame(
@@ -246,6 +275,7 @@ def _open_dataset(
 def record_kinesthetic(cfg: KinestheticRecordConfig) -> LeRobotDataset:
     """Run a multi-episode direct LiteArm collection session."""
     init_logging()
+    _configure_gripper_logging(cfg.verbose_gripper_logs)
     logging.info(pformat(asdict(cfg)))
     if cfg.display_data:
         init_rerun(
@@ -287,8 +317,13 @@ def record_kinesthetic(cfg: KinestheticRecordConfig) -> LeRobotDataset:
                 recorded_episodes < cfg.dataset.num_episodes
                 and not events["stop_recording"]
             ):
-                log_say(
-                    f"Recording episode {dataset.num_episodes}", cfg.play_sounds
+                dataset_episode = dataset.num_episodes + 1
+                session_episode = recorded_episodes + 1
+                _announce_recording_phase(
+                    dataset_episode=dataset_episode,
+                    session_episode=session_episode,
+                    session_total=cfg.dataset.num_episodes,
+                    play_sounds=cfg.play_sounds,
                 )
                 try:
                     frames = record_kinesthetic_loop(
@@ -318,7 +353,12 @@ def record_kinesthetic(cfg: KinestheticRecordConfig) -> LeRobotDataset:
                     recorded_episodes < cfg.dataset.num_episodes - 1
                     or events["rerecord_episode"]
                 ):
-                    log_say("Reset the environment", cfg.play_sounds)
+                    _announce_reset_phase(
+                        dataset_episode=dataset_episode,
+                        session_episode=session_episode,
+                        session_total=cfg.dataset.num_episodes,
+                        play_sounds=cfg.play_sounds,
+                    )
                     record_kinesthetic_loop(
                         robot,
                         events,

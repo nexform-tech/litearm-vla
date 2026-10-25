@@ -1,6 +1,7 @@
 """Offline LeRobot dataset and 30 Hz pairing tests."""
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -181,6 +182,55 @@ def test_record_config_requires_30_hz_and_camera_for_video(tmp_path):
     dataset_cfg.fps = 20
     with pytest.raises(ValueError, match="30"):
         recording.KinestheticRecordConfig(robot=robot_cfg, dataset=dataset_cfg)
+
+
+def test_gripper_logging_hides_only_routine_sdk_information():
+    logger = logging.getLogger("litegrip")
+    original_level = logger.level
+    try:
+        recording._configure_gripper_logging(verbose=False)
+        assert logger.level == logging.WARNING
+        assert not logger.isEnabledFor(logging.INFO)
+        assert logger.isEnabledFor(logging.WARNING)
+
+        recording._configure_gripper_logging(verbose=True)
+        assert logger.level == logging.INFO
+        assert logger.isEnabledFor(logging.INFO)
+    finally:
+        logger.setLevel(original_level)
+
+
+def test_phase_announcements_state_whether_data_capture_is_active(monkeypatch):
+    messages = []
+    monkeypatch.setattr(
+        recording,
+        "log_say",
+        lambda message, play_sounds: messages.append((message, play_sounds)),
+    )
+
+    recording._announce_recording_phase(
+        dataset_episode=4,
+        session_episode=1,
+        session_total=2,
+        play_sounds=False,
+    )
+    recording._announce_reset_phase(
+        dataset_episode=4,
+        session_episode=1,
+        session_total=2,
+        play_sounds=False,
+    )
+
+    assert messages == [
+        (
+            "[PHASE: RECORDING] Dataset episode 4; session 1/2; data capture ON",
+            False,
+        ),
+        (
+            "[PHASE: RESET] After dataset episode 4; session 1/2; data capture OFF",
+            False,
+        ),
+    ]
 
 
 def test_recording_rejects_gripper_without_a_display(monkeypatch, tmp_path):
