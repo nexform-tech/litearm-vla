@@ -34,6 +34,12 @@ for contributors working on LiteArm VLA data collection.
 - Record at a fixed 30 Hz.
 - Store measured joint state as `observation.state[t]`.
 - Store the next measured joint state as `action[t] = q[t+1]`.
+- Record every state and action component in radians. When the LiteGrip is
+  enabled, `gripper.pos` is the calibrated opening angle
+  (`position_mm / rad_to_mm`, 0 at the closed stop), not the raw jaw travel in
+  millimetres.
+- Never mix datasets whose `gripper.pos` uses different units. LeRobot checks
+  feature names and shapes, not units.
 - Drop the final observation of each episode because it has no future action.
 - Reject and re-record an episode when timing cannot honestly represent 30 Hz.
 - Keep one zero-gravity session active across recording, environment reset,

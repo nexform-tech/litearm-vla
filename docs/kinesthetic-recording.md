@@ -201,7 +201,7 @@ print(
 if observation.shape[1] > 7:
     print("gripper opening range:", np.round(
         observation[:, 7].max() - observation[:, 7].min(), 2
-    ), "mm")
+    ), "rad")
 PY
 ```
 
@@ -209,8 +209,10 @@ Pass only when the dataset reopens, reports 30 Hz, contains finite `(N, 7)` or
 `(N, 8)` state and action arrays, and the video matches the physical task. The
 pairing error should be near zero because `action[t]` is
 `observation.state[t+1]` for every column, including `gripper.pos` when the
-gripper is enabled. The gripper action is therefore continuous while the jaws
-move; it is not the commanded target.
+gripper is enabled. `gripper.pos` is the calibrated opening angle in radians
+(0 at the closed stop), so the whole state vector uses one unit. The gripper
+action is therefore continuous while the jaws move; it is not the commanded
+target.
 
 Check pairing **within each episode**. The last frame of an episode has no
 future action in that episode, so its `action` is the episode's final measured

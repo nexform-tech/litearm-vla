@@ -176,13 +176,14 @@ print(
 if observation.shape[1] > 7:
     print("gripper opening range:", np.round(
         observation[:, 7].max() - observation[:, 7].min(), 2
-    ), "mm")
+    ), "rad")
 PY
 ```
 
 只有当数据集能重新打开、报告 30 Hz、包含有限的 `(N, 7)` 或 `(N, 8)` 状态与动作
 数组，并且视频与物理任务相符时，才算通过。配对误差应接近零，因为每一列都满足
-`action[t]` 等于 `observation.state[t+1]`，启用夹爪时包括 `gripper.pos`。因此
+`action[t]` 等于 `observation.state[t+1]`，启用夹爪时包括 `gripper.pos`。
+`gripper.pos` 是标定后的开度角（弧度，闭合限位为 0），因此整个状态向量单位一致。
 夹爪动作在运动过程中是连续的，而不是下发的目标值。
 
 配对误差必须**按 episode 分别检查**。每个 episode 的最后一帧在本 episode 内没有

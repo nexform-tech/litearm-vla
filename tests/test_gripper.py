@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from litearm_vla.gripper import GripperError, LiteGripOptions
+from litearm_vla.gripper import (
+    GripperError,
+    LiteGripController,
+    LiteGripOptions,
+)
 from litearm_vla.kinesthetic import (
     KinestheticRobot,
     KinestheticRobotConfig,
@@ -16,6 +20,11 @@ from litearm_vla.kinesthetic import (
 
 def _event_names(events):
     return [event[0] if isinstance(event, tuple) else event for event in events]
+
+
+def _opening_rad(gripper, position_mm: float) -> float:
+    """The opening angle the recorder must store for a fake jaw position."""
+    return position_mm / gripper.config.rad_to_mm
 
 
 def _config(tmp_path, **overrides):
@@ -67,10 +76,14 @@ def test_gripper_enabled_adds_features_and_measured_action(
     assert list(robot.action_features) == list(robot.observation_features)
 
     sample = robot.capture_sample()
-    assert sample.observation["gripper.pos"] == pytest.approx(20.0)
+    assert sample.observation["gripper.pos"] == pytest.approx(
+        _opening_rad(gripper, 20.0)
+    )
     # The gripper follows the arm's q[t+1] rule: this sample's measured
     # opening becomes the paired frame's action.
-    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(20.0)
+    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(
+        _opening_rad(gripper, 20.0)
+    )
     assert sample.future_action_candidate == sample.observation
 
     robot.disconnect()
@@ -92,12 +105,16 @@ def test_action_is_the_opening_measured_next_not_the_commanded_target(
     # gripper column stays continuous instead of jumping between 0 and 80.
     gripper.state.position_mm = 37.5
     sample = robot.capture_sample()
-    assert sample.observation["gripper.pos"] == pytest.approx(37.5)
-    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(37.5)
+    assert sample.observation["gripper.pos"] == pytest.approx(
+        _opening_rad(gripper, 37.5)
+    )
+    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(
+        _opening_rad(gripper, 37.5)
+    )
 
     gripper.state.position_mm = 38.2
     assert robot.capture_sample().future_action_candidate["gripper.pos"] == (
-        pytest.approx(38.2)
+        pytest.approx(_opening_rad(gripper, 38.2))
     )
 
     robot.disconnect()
@@ -131,12 +148,16 @@ def test_keys_request_open_and_close(fake_arm, fake_gripper, tmp_path):
     deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline:
         sample = robot.capture_sample()
-        if sample.observation["gripper.pos"] == pytest.approx(80.0):
+        if sample.observation["gripper.pos"] == pytest.approx(
+            _opening_rad(gripper, 80.0)
+        ):
             break
         time.sleep(0.005)
     else:
         pytest.fail("the open command did not move the fake jaws")
-    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(80.0)
+    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(
+        _opening_rad(gripper, 80.0)
+    )
 
     events = {"gripper_close": True}
     robot.apply_keyboard_events(events)
@@ -289,8 +310,12 @@ def test_persistent_grasp_failure_holds_position_and_keeps_the_session(
         pytest.fail("a failed grasp did not fall back to a position hold")
 
     sample = robot.capture_sample()
-    assert sample.observation["gripper.pos"] == pytest.approx(42.0)
-    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(42.0)
+    assert sample.observation["gripper.pos"] == pytest.approx(
+        _opening_rad(gripper, 42.0)
+    )
+    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(
+        _opening_rad(gripper, 42.0)
+    )
     robot.assert_safe()
 
     # A new close press must restart the grasp, not be swallowed as an
@@ -348,8 +373,12 @@ def test_grasp_excursion_inside_the_sdk_hold_guard_is_accepted(
     # must not trip on an excursion the motor is still holding correctly.
     gripper.state.position_mm = -2.5
     sample = robot.capture_sample()
-    assert sample.observation["gripper.pos"] == pytest.approx(-2.5)
-    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(-2.5)
+    assert sample.observation["gripper.pos"] == pytest.approx(
+        _opening_rad(gripper, -2.5)
+    )
+    assert sample.future_action_candidate["gripper.pos"] == pytest.approx(
+        _opening_rad(gripper, -2.5)
+    )
 
     # Beyond the configured margin is still a fault.
     gripper.state.position_mm = -5.0
@@ -399,6 +428,14 @@ def test_enable_failure_names_the_can_link(
 
     assert fake_gripper.instances[-1].disconnected
     assert fake_arm.instances[-1].events[-1] == "close"
+
+
+@pytest.mark.parametrize("value", [0.0, -61.01, float("nan"), float("inf")])
+def test_unusable_rad_to_mm_is_rejected(value):
+    """A division by a calibration scale that cannot be trusted must fail."""
+    gripper = SimpleNamespace(config=SimpleNamespace(rad_to_mm=value))
+    with pytest.raises(GripperError, match="rad_to_mm"):
+        LiteGripController._calibrated_rad_to_mm(gripper)
 
 
 @pytest.mark.parametrize(
