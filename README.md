@@ -292,6 +292,16 @@ unit is the shipped normal-mount configuration.
 was never moved. Zero-gravity makes the arm easy to drag, but it does not move
 on its own.
 
+**`lerobot-edit-dataset` cannot edit a local dataset.** Without `--root` it only
+checks `~/.cache/huggingface/lerobot/<repo_id>`, then queries the Hub, so
+`RepositoryNotFoundError` is not an authentication problem. With `--root`,
+LeRobot 0.4.4 handles local paths inconsistently: deletion treats the path as
+both the dataset and its parent, and merge applies one root to every source.
+Call `delete_episodes()` or `merge_datasets()` directly with explicit paths; see
+[section 6](docs/kinesthetic-recording.md#6-remove-a-failed-episode) and
+[section 7](docs/kinesthetic-recording.md#7-merge-datasets) of the recording
+guide.
+
 **Video encoding and the watchdog.** LeRobot's default `libsvtav1` was measured
 stalling the recording process for more than 100 ms while encoding an episode.
 Sessions using both `libsvtav1` and `h264` have still failed closed at save time

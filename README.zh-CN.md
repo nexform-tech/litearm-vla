@@ -170,8 +170,8 @@ litearm-vla-record \
   --robot.gripper.enabled=true \
   --robot.gripper.channel=can0 \
   --robot.cameras='{wrist: {type: opencv, index_or_path: /dev/video4, width: 640, height: 480, fps: 30}}' \
-  --dataset.repo_id=local/litearm-pick-place-v4 \
-  --dataset.root=data/litearm-pick-place-v4\
+  --dataset.repo_id=local/litearm-pick-place-v10 \
+  --dataset.root=data/litearm-pick-place-v10 \
   --dataset.single_task='Pick up the block and place it on the other side.' \
   --dataset.fps=30 \
   --dataset.episode_time_s=20 \
@@ -179,6 +179,7 @@ litearm-vla-record \
   --dataset.num_episodes=10 \
   --dataset.video=true \
   --dataset.push_to_hub=false \
+  --resume=true \
   --play_sounds=false
 ```
 
@@ -265,6 +266,14 @@ SDK 刻意不会自动拾取 `~/.litegrip/can0_08_calibration.json`。请显式�
 
 **episode 是静止的。** 数据集检查里的 `unique rows: 1` 表示整个录制期间机械臂根本
 没被拖动过。零重力下很容易拖动，但它不会自己动。
+
+**`lerobot-edit-dataset` 改不了本地数据集。** 不传 `--root` 时它只查
+`~/.cache/huggingface/lerobot/<repo_id>`，然后转向 Hub，因此
+`RepositoryNotFoundError` 不是认证问题。传 `--root` 后，LeRobot 0.4.4 对本地路径的
+处理前后不一致：删除把该路径既当数据集目录又当父目录，合并则把同一个 root 发给所有
+源数据集。请直接调用 `delete_episodes()` 或 `merge_datasets()` 并显式指定路径，见
+[录制指南第 6 节](docs/kinesthetic-recording.zh-CN.md#6-删除失败的-episode)和
+[第 7 节](docs/kinesthetic-recording.zh-CN.md#7-合并数据集)。
 
 **视频编码与看门狗。** 实测 LeRobot 默认的 `libsvtav1` 在编码 episode 时会让录制
 进程停顿超过 100 ms。在参考机上也观察到使用 `libsvtav1` 和 `h264` 的会话都在保存
