@@ -249,8 +249,8 @@ cd /home/yd/wl/VLA/litearm-vla
 conda activate litearm-lerobot
 
 lerobot-train \
-  --dataset.repo_id=local/litearm-hand-guide-smoke-v3 \
-  --dataset.root=/home/yd/wl/VLA/litearm-vla/data/litearm-hand-guide-smoke-v3 \
+  --dataset.repo_id=local/litearm-pick-place-v10-edited \
+  --dataset.root=data/litearm-pick-place-v10-edited \
   --dataset.video_backend=torchcodec \
   --policy.path=lerobot/smolvla_base \
   --policy.input_features=null \
@@ -291,8 +291,8 @@ cd /home/yd/wl/VLA/litearm-vla
 conda activate litearm-lerobot
 
 lerobot-train \
-  --dataset.repo_id=local/litearm-pick-place-v3 \
-  --dataset.root=data/litearm-pick-place-v3\
+  --dataset.repo_id=local/litearm-pick-place-v10-edited \
+  --dataset.root=data/litearm-pick-place-v10-edited \
   --dataset.video_backend=torchcodec \
   --policy.path=lerobot/smolvla_base \
   --policy.input_features=null \
@@ -302,13 +302,13 @@ lerobot-train \
   --policy.n_action_steps=10 \
   --peft.method_type=LORA \
   --peft.r=16 \
-  --batch_size=4 \
-  --steps=15000 \
+  --batch_size=16 \
+  --steps=20000 \
   --num_workers=4 \
-  --save_freq=3000 \
+  --save_freq=2000 \
   --log_freq=100 \
-  --output_dir=/home/yd/vla-runs/litearm-smolvla-v3 \
-  --job_name=litearm_smolvla_v3 \
+  --output_dir=/home/yd/vla-runs/litearm-smolvla-v10-edited-29 \
+  --job_name=litearm_smolvla_v10_edited_29 \
   --wandb.enable=false
 ```
 
