@@ -25,10 +25,19 @@ link.
 
 - Seven arm joints. The LiteGrip is optional and off by default.
 - `observation.state[t]` is the measured joint vector `q[t]`, plus
-  `gripper.pos` in millimetres when the gripper is enabled.
+  `gripper.pos` when the gripper is enabled. Every component is in radians;
+  `gripper.pos` is the calibrated opening angle (`position_mm / rad_to_mm`,
+  0 rad at the closed stop).
 - `action[t]` is the next measured vector `q[t+1]`, including
-  `gripper.pos` when the gripper is enabled. The gripper follows the same rule
-  as the joints, so its action is continuous while the jaws move.
+  `gripper.pos` in the same radians when the gripper is enabled. The gripper
+  follows the same rule as the joints, so its action is continuous while the
+  jaws move.
+- Datasets recorded before this unit rule stored `gripper.pos` in millimetres
+  under the same feature name. Do not resume or mix them with radian datasets;
+  re-record them, or convert the column with the gripper's calibrated
+  `rad_to_mm` and regenerate the dataset statistics.
+- A policy command uses the same radians. Convert it back with
+  `position_mm = position_rad * rad_to_mm` before commanding LiteGrip.
 - The final observation is dropped because it has no future action.
 - Recording is fixed at 30 Hz and slow episodes are discarded.
 - LeRobot owns cameras, dataset features, video encoding, episode save, resume,

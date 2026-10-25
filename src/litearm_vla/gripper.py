@@ -25,6 +25,10 @@ import litegrip
 log = logging.getLogger(__name__)
 
 #: Feature name added to both the observation and the action when enabled.
+#: The value is the calibrated opening angle in radians (0 at the closed stop),
+#: the same unit as the arm joints, so the whole state/action vector is
+#: dimensionally uniform. Datasets recorded before this rule stored millimetres
+#: under the same name and must not be mixed with new ones.
 GRIPPER_FEATURE = "gripper.pos"
 
 #: Openings this far outside the calibrated travel are treated as a fault.
@@ -143,14 +147,19 @@ class LiteGripOptions:
 
 @dataclass(frozen=True)
 class GripperSample:
-    """One measured opening.
+    """One measured opening, expressed as the calibrated opening angle.
+
+    ``position_rad`` is ``position_mm / rad_to_mm`` from the calibration: 0 rad
+    at the closed stop, increasing with the opening. It uses radians so
+    ``gripper.pos`` shares the arm joints' unit instead of mixing millimetres
+    into the state vector.
 
     The recorder pairs it with the previous observation exactly like the arm
     joints: ``observation`` carries this opening and the next sample's opening
     becomes ``action[t] = q[t+1]``.
     """
 
-    position_mm: float
+    position_rad: float
 
 
 class LiteGripController:
@@ -167,6 +176,7 @@ class LiteGripController:
         self._applied_command: str | None = None
         self._open_mm = 0.0
         self._travel_mm = 0.0
+        self._rad_to_mm = 0.0
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -202,6 +212,7 @@ class LiteGripController:
             if refresh is not None:
                 refresh()
             state = gripper.get_state(wait=True)
+            self._rad_to_mm = self._calibrated_rad_to_mm(gripper)
             self._travel_mm = self._travel(gripper)
             self._open_mm = self._resolve_open_mm(gripper)
             self._validate_state(state)
@@ -301,7 +312,9 @@ class LiteGripController:
             raise GripperError("LiteGrip is not connected")
         state = gripper.get_state(wait=False)
         self._validate_state(state)
-        return GripperSample(position_mm=float(state.position_mm))
+        return GripperSample(
+            position_rad=float(state.position_mm) / self._rad_to_mm
+        )
 
     def assert_safe(self) -> None:
         self._raise_if_failed()
@@ -474,6 +487,16 @@ class LiteGripController:
                 f"travel 0-{self._travel_mm:.1f} mm by more than "
                 f"{tolerance:.1f} mm"
             )
+
+    @staticmethod
+    def _calibrated_rad_to_mm(gripper: Any) -> float:
+        value = float(gripper.config.rad_to_mm)
+        if not math.isfinite(value) or value <= 0:
+            raise GripperError(
+                "LiteGrip calibration reports no usable rad_to_mm; its opening "
+                "cannot be expressed in radians"
+            )
+        return value
 
     @staticmethod
     def _travel(gripper: Any) -> float:
