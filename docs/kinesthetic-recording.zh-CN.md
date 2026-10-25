@@ -202,3 +202,97 @@ PY
 
 不要把这个冒烟 episode 混入生产数据集。仅当已存在数据集且其机器人、相机、任务
 schema 和 30 Hz 契约都一致时，才使用 `--resume=true`。
+
+## 6. 删除失败的 episode
+
+第 5 节确认某条 episode 失败或静止后，删除它应当可复现。LeRobot 会重新编码保留的
+视频并重写 episode 元数据，因此结果会写入一个新的数据集目录。
+
+在 LeRobot 0.4.4 上，`lerobot-edit-dataset` 只能编辑默认缓存布局
+（`~/.cache/huggingface/lerobot/<repo_id>`）里的数据集，改不了放在 `data/` 下的
+本地数据集：
+
+```bash
+# 失败：没有本地 root 时，它先查 Hub 缓存，再查 Hub。
+lerobot-edit-dataset \
+    --repo_id local/litearm-pick-place-v5 \
+    --operation.type delete_episodes \
+    --operation.episode_indices "[3, 9]"
+```
+
+不传 `--root` 时，它在
+`~/.cache/huggingface/lerobot/<repo_id>/meta/info.json` 找不到元数据，随后把
+`repo_id` 当成 Hub 仓库查询并抛出 `RepositoryNotFoundError`。这不是认证问题，本地
+数据集不需要登录 Hugging Face。
+
+传 `--root=<数据集目录>` 确实能加载数据，但 `handle_delete_episodes` 又把同一路径
+当成父目录：它把输出算成 `<root>/<repo_id>`，并把已加载数据集的 `root` 改成
+`<root>_old`。删除阶段于是去读从未创建的 `<root>_old/videos/...`，以
+`FileNotFoundError` 结束。这些数据集在 0.4.4 上无法通过这个 CLI 删除。
+
+请直接调用数据集工具，并显式指定一个尚不存在的输出目录；源数据集保持不动：
+
+```bash
+cd /home/yd/wl/VLA/litearm-vla
+
+python - <<'PY'
+from pathlib import Path
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.dataset_tools import delete_episodes
+
+source = Path("data/litearm-pick-place-v9")
+output = Path("data/litearm-pick-place-v9-edited")  # 不能已存在
+
+dataset = LeRobotDataset("local/litearm-pick-place-v9", root=source)
+edited = delete_episodes(
+    dataset,
+    episode_indices=[4, 5, 7, 9],
+    output_dir=output,
+    repo_id="local/litearm-pick-place-v9",
+)
+print("episodes:", edited.meta.total_episodes)
+print("frames:", edited.meta.total_frames)
+PY
+```
+
+`repo_id` 只是逻辑标识，`root` 才决定读写哪个目录。删除后保留下来的 episode 会重新
+连续编号，请对新目录重跑第 5 节的检查，并在后续录制或训练中用 `--dataset.root`
+指向该目录。
+
+## 7. 合并数据集
+
+`lerobot-edit-dataset` 的 merge 操作有同样的限制：`handle_merge` 把同一个
+`--root` 传给每个源数据集，而 `LeRobotDataset` 把 `root` 当成每个数据集自己的目录。
+一个 root 只能指向一个目录，因此这个 CLI 无法合并 `data/` 下互不相同的本地目录。
+不传 `--root` 时它先查 Hub 缓存再查 Hub，同样以 `RepositoryNotFoundError` 结束。
+
+请为每个源数据集分别指定 `root`，直接调用数据集工具。输出目录必须尚不存在，源数据集
+保持不动：
+
+```bash
+cd /home/yd/wl/VLA/litearm-vla
+
+python - <<'PY'
+from pathlib import Path
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.dataset_tools import merge_datasets
+
+sources = [
+    ("local/litearm-pick-place-v9-edited", Path("data/litearm-pick-place-v9-edited")),
+    ("local/litearm-pick-place-v6", Path("data/litearm-pick-place-v6")),
+]
+datasets = [LeRobotDataset(repo_id, root=root) for repo_id, root in sources]
+
+merged = merge_datasets(
+    datasets,
+    output_repo_id="local/litearm-pick-place-v10",
+    output_dir=Path("data/litearm-pick-place-v10"),  # 不能已存在
+)
+print("episodes:", merged.meta.total_episodes)
+print("frames:", merged.meta.total_frames)
+PY
+```
+
+所有源数据集必须具有相同的 `robot_type`、`fps`、特征名和形状；`gripper.pos` 单位
+不同的数据集不能合并。合并会复制数据和视频文件，并把 episode 从 0 开始重新连续编号，
+因此请对新目录重跑第 5 节的检查，并在后续录制或训练中用 `--dataset.root` 指向它。

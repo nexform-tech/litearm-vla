@@ -236,3 +236,105 @@ catch it.
 Do not mix this smoke episode into a production dataset. Use `--resume=true`
 only for an existing dataset with the same robot, camera, task schema, and 30 Hz
 contract.
+
+## 6. Remove a failed episode
+
+Once section 5 identifies a failed or static episode, delete it
+reproducibly. LeRobot re-encodes the retained videos and rewrites the episode
+metadata, so the result is a new dataset directory.
+
+In LeRobot 0.4.4 `lerobot-edit-dataset` only edits datasets in the default
+cache layout (`~/.cache/huggingface/lerobot/<repo_id>`); it cannot edit a
+dataset kept under a local root such as `data/`:
+
+```bash
+# Fails: with no local root it checks the Hub cache, then the Hub.
+lerobot-edit-dataset \
+    --repo_id local/litearm-pick-place-v5 \
+    --operation.type delete_episodes \
+    --operation.episode_indices "[3, 9]"
+```
+
+Without `--root`, it finds no metadata at
+`~/.cache/huggingface/lerobot/<repo_id>/meta/info.json`, treats `repo_id` as a
+Hub repository, and raises `RepositoryNotFoundError`. This is not an
+authentication problem; do not log in to Hugging Face for a local dataset.
+
+`--root=<dataset directory>` does load the data, but `handle_delete_episodes`
+also treats that path as the parent directory for its output: it computes
+`<root>/<repo_id>` and repoints the loaded dataset at `<root>_old`. Deletion
+then reads video files from a `_old` path that was never created and fails with
+`FileNotFoundError`. The CLI path is unusable for these datasets on 0.4.4.
+
+Call the dataset tool directly with an explicit output directory that does not
+exist yet. The source dataset stays untouched:
+
+```bash
+cd /home/yd/wl/VLA/litearm-vla
+
+python - <<'PY'
+from pathlib import Path
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.dataset_tools import delete_episodes
+
+source = Path("data/litearm-pick-place-v5")
+output = Path("data/litearm-pick-place-v5-edited")  # must not exist yet
+
+dataset = LeRobotDataset("local/litearm-pick-place-v5", root=source)
+edited = delete_episodes(
+    dataset,
+    episode_indices=[3, 9],
+    output_dir=output,
+    repo_id="local/litearm-pick-place-v5",
+)
+print("episodes:", edited.meta.total_episodes)
+print("frames:", edited.meta.total_frames)
+PY
+```
+
+`repo_id` is only the logical identifier; `root` selects the files. Deletion
+renumbers the surviving episodes contiguously, so re-run the section 5 checks
+on the new directory and point later recording or training runs at it with
+`--dataset.root`.
+
+## 7. Merge datasets
+
+The `lerobot-edit-dataset` merge operation has the same limitation as deletion:
+`handle_merge` passes one `--root` to every source dataset, while
+`LeRobotDataset` treats `root` as that dataset's own directory. One root can
+only address one directory, so the CLI cannot merge distinct local directories
+under `data/`. Without `--root` it checks the Hub cache and then the Hub, and
+ends in `RepositoryNotFoundError`.
+
+Give each source dataset its own root and call the dataset tool directly. The
+output directory must not exist yet, and the sources stay untouched:
+
+```bash
+cd /home/yd/wl/VLA/litearm-vla
+
+python - <<'PY'
+from pathlib import Path
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.dataset_tools import merge_datasets
+
+sources = [
+    ("local/litearm-pick-place-v4-edited", Path("data/litearm-pick-place-v4-edited")),
+    ("local/litearm-pick-place-v5-edited", Path("data/litearm-pick-place-v5-edited")),
+]
+datasets = [LeRobotDataset(repo_id, root=root) for repo_id, root in sources]
+
+merged = merge_datasets(
+    datasets,
+    output_repo_id="local/litearm-pick-place-v6",
+    output_dir=Path("data/litearm-pick-place-v6"),  # must not exist yet
+)
+print("episodes:", merged.meta.total_episodes)
+print("frames:", merged.meta.total_frames)
+PY
+```
+
+All sources must share `robot_type`, `fps`, feature names, and shapes; datasets
+whose `gripper.pos` uses different units must not be merged. The merge copies
+data and video files and renumbers episodes from zero, so re-run the section 5
+checks on the new directory and point later recording or training runs at it
+with `--dataset.root`.
