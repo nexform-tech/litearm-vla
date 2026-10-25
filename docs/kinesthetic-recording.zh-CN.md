@@ -115,8 +115,14 @@ PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 首次按键走到标定端点；新的按键会在一个切片（`grasp_hold_s`，默认 0.2 s）内打断
 正在进行的夹取。夹爪在创建数据集之前完成连接，并与机械臂共用同一套安全监控。
 
-`--robot.payload_kg=0.62` 会在使能前把末端负载质量写入固件的重力前馈，并通过读回
-校验。`set_payload()` 同时会写质心，因此默认的 `payload_com=(0, 0, 0)` 会清除已有
+终端在写入数据帧时显示 `[PHASE: RECORDING]`，在只复位环境、不写数据时显示
+`[PHASE: RESET]`。程序默认隐藏 LiteGrip 常规 `INFO`，避免这些信息淹没阶段标记；
+所有 `WARNING` 和 `ERROR` 仍会显示。只有诊断夹爪连接或运动细节时才传入
+`--verbose_gripper_logs=true`。
+
+`--robot.payload_kg=0.62 --robot.payload_com='[0, 0, 0.03]'` 会在使能前把末端负载
+质量与质心（法兰 `+z` 方向 3 cm）写入固件的重力前馈，并通过读回校验质量。
+`set_payload()` 会同时写两个值；不传 `payload_com` 时默认 `(0, 0, 0)` 会清除已有
 偏移。该写入只改 RAM。
 
 锁存故障会阻止运行。只要存在 `FAULT`、`POS_VIOL`、`FB_STALE` 或 `joint_fault`

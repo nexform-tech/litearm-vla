@@ -166,16 +166,17 @@ litearm-vla-record \
   --robot.auto_clear_faults=true \
   --robot.ignored_flags='["WD_TRIPPED"]' \
   --robot.payload_kg=0.62 \
+  --robot.payload_com='[0, 0, 0.03]' \
   --robot.gripper.enabled=true \
   --robot.gripper.channel=can0 \
   --robot.cameras='{wrist: {type: opencv, index_or_path: /dev/video4, width: 640, height: 480, fps: 30}}' \
-  --dataset.repo_id=local/litearm-hand-guide-smoke-v5 \
-  --dataset.root=data/litearm-hand-guide-smoke-v5\
-  --dataset.single_task='抓取方块并放在另一边' \
+  --dataset.repo_id=local/litearm-pick-place-v4 \
+  --dataset.root=data/litearm-pick-place-v4\
+  --dataset.single_task='Pick up the block and place it on the other side.' \
   --dataset.fps=30 \
-  --dataset.episode_time_s=10 \
-  --dataset.reset_time_s=5 \
-  --dataset.num_episodes=5 \
+  --dataset.episode_time_s=20 \
+  --dataset.reset_time_s=20 \
+  --dataset.num_episodes=10 \
   --dataset.video=true \
   --dataset.push_to_hub=false \
   --play_sounds=false
@@ -186,14 +187,19 @@ litearm-vla-record \
 链路、加载标定并使能夹爪电机。
 
 `--robot.payload_kg=0.62` 会在使能机械臂之前把末端负载质量写入固件的重力前馈，
-然后用 `get_ff_scalar()` 读回 item 4 校验；读回值与请求值不一致就故障关闭。该写入
-只改 RAM；如需掉电保留，请自行调用 `Arm.save_params()`。`set_payload()` 同时会写
-质心，所以 `--robot.payload_com` 默认为 `(0, 0, 0)`；工具不在法兰处平衡时请传入
-实测偏移。
+然后用 `get_ff_scalar()` 读回 item 4 校验；读回值与请求值不一致就故障关闭。
+`--robot.payload_com='[0, 0, 0.03]'` 把质心放在法兰 `+z` 方向 3 cm 处；
+`set_payload()` 会同时写入这两个值。该写入只改 RAM；如需掉电保留，请自行调用
+`Arm.save_params()`。
 
 进程会独占
 打开机械臂，校验最新反馈与固件限位，进入一次零重力模式，并在录制、复位、丢弃和
 保存各阶段保持该模式有效。
+
+终端用 `[PHASE: RECORDING]` 与 `data capture ON` 标记录制阶段，用
+`[PHASE: RESET]` 与 `data capture OFF` 标记环境复位阶段。程序默认隐藏 LiteGrip
+常规 `INFO`，但保留所有告警和错误；诊断夹爪 SDK 时可加
+`--verbose_gripper_logs=true`。
 
 - 右方向键：提前结束当前录制或复位阶段。
 - 左方向键：丢弃当前 episode 并重录。
@@ -213,6 +219,8 @@ litearm-vla-record \
 `--robot.gripper.enabled=true` 时，无显示环境会在打开任何设备之前直接报错退出。
 
 有关分阶段硬件准入与数据集检查，请参阅[录制指南](docs/kinesthetic-recording.zh-CN.md)。
+数据集准备完成后，请按照 [SmolVLA 训练教程](docs/smolvla-training.zh-CN.md)先完成
+离线字段检查和 10-step 冒烟训练。当前 `smoke-v3` 数据只用于验证训练链路。
 
 ## 故障排查
 

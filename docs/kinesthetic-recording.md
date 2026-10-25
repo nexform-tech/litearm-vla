@@ -131,10 +131,18 @@ a running grasp within one slice (`grasp_hold_s`, 0.2 s by default). The
 gripper is opened before the dataset is created, and its session joins the same
 safety monitor as the arm.
 
-`--robot.payload_kg=0.62` sets the tool mass in the firmware's gravity
-feed-forward before enable and verifies it by readback. `set_payload()` also
-writes the centre of mass, so the default `payload_com=(0, 0, 0)` clears any
-stored offset. The write is RAM-only.
+The terminal prints `[PHASE: RECORDING]` while frames are added to the dataset
+and `[PHASE: RESET]` while you reset the environment without recording. Routine
+LiteGrip `INFO` messages are hidden by default so they do not bury these phase
+markers; all `WARNING` and `ERROR` records remain visible. Pass
+`--verbose_gripper_logs=true` only when you need the SDK's connection and motion
+details for diagnosis.
+
+`--robot.payload_kg=0.62 --robot.payload_com='[0, 0, 0.03]'` set the tool mass
+and its centre of mass (3 cm along the flange `+z` axis) in the firmware's
+gravity feed-forward before enable and verify the mass by readback.
+`set_payload()` always writes both, so omitting `payload_com` clears any stored
+offset to `(0, 0, 0)`. The write is RAM-only.
 
 A latched fault blocks the run. Any of `FAULT`, `POS_VIOL`, `FB_STALE`, or
 `joint_fault` makes `robot.connect()` raise before the arm is energized. The

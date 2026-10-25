@@ -178,6 +178,7 @@ litearm-vla-record \
   --robot.auto_clear_faults=true \
   --robot.ignored_flags='["WD_TRIPPED"]' \
   --robot.payload_kg=0.62 \
+  --robot.payload_com='[0, 0, 0.03]' \
   --robot.gripper.enabled=true \
   --robot.gripper.channel=can0 \
   --robot.cameras='{wrist: {type: opencv, index_or_path: /dev/video4, width: 640, height: 480, fps: 30}}' \
@@ -200,13 +201,18 @@ gripper motor before the dataset is created.
 
 `--robot.payload_kg=0.62` writes the tool payload into the firmware's gravity
 feed-forward before the arm is enabled, then reads item 4 back with
-`get_ff_scalar()` and fails closed if the firmware kept a different value. The
-write is RAM-only; call `Arm.save_params()` yourself if it must survive a power
-cycle. `set_payload()` also writes the centre of mass, so
-`--robot.payload_com` defaults to `(0, 0, 0)`; pass the measured offset if the
-tool does not balance at the flange. The process opens the arm exclusively, validates fresh
-feedback and firmware limits, enters zero-gravity once, and keeps it active
-across recording, reset, discard, and save phases.
+`get_ff_scalar()` and fails closed if the firmware kept a different value.
+`--robot.payload_com='[0, 0, 0.03]'` places its centre of mass 3 cm along the
+flange `+z` axis; `set_payload()` writes both values. The write is RAM-only;
+call `Arm.save_params()` yourself if it must survive a power cycle. The process
+opens the arm exclusively, validates fresh feedback and firmware limits, enters
+zero-gravity once, and keeps it active across recording, reset, discard, and
+save phases.
+
+The terminal marks `[PHASE: RECORDING]` with `data capture ON` and
+`[PHASE: RESET]` with `data capture OFF`. Routine LiteGrip `INFO` messages are
+hidden so the phase remains clear; warnings and errors remain visible. Add
+`--verbose_gripper_logs=true` when diagnosing the gripper SDK.
 
 - Right arrow: finish the current recording or reset phase early.
 - Left arrow: discard the current episode and record it again.
