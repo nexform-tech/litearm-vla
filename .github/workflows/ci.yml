@@ -1,11 +1,12 @@
-# Test gate for a repository that currently ships documentation only.
+# Test gate for litearm-vla: offline collection and deployment tests plus the
+# repository standards checks.
 #
 # Tests live in their own workflow: they run on pull requests, while the release
 # workflow runs on pushes to the default branch. Mixing the two means a broken
 # release blocks a pull request, or the reverse.
 #
-# Replace the test step with the project's real toolchain and test command as soon
-# as source code lands.
+# litearm-lerobot is not on PyPI, so it is installed from its Git repository.
+# It provides litearm-python, litegrip, and the adapters this package imports.
 name: CI
 
 on:
@@ -44,3 +45,20 @@ jobs:
           python3 -c "import json; json.load(open('.releaserc.json'))"
           python3 -c "import json; json.load(open('.markdownlint.json'))"
           echo "repository standards OK"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # litearm-python and litearm-lerobot are not on PyPI. Installing the
+          # base SDK from Git first satisfies litearm-lerobot's requirement.
+          python -m pip install "litearm-python @ git+https://github.com/nexform-tech/litearm-python"
+          python -m pip install "litearm-lerobot @ git+https://github.com/nexform-tech/litearm-lerobot"
+          python -m pip install -e ".[dev]"
+
+      - name: Test
+        run: pytest -q
