@@ -1,6 +1,8 @@
+<!-- markdownlint-disable MD041 -- the language switcher intentionally precedes the H1 -->
 English | [中文](README.zh-CN.md)
 
-This repository records policy-training LiteArm demonstrations and runs trained LeRobot policy checkpoints, for developers using LeRobot 0.4.4.
+This repository records policy-training LiteArm demonstrations and runs trained
+LeRobot policy checkpoints, for developers using LeRobot 0.4.4.
 
 # litearm-vla
 

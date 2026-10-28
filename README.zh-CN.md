@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -- the language switcher intentionally precedes the H1 -->
 [English](README.md) | 中文
 
 本仓库面向使用 LeRobot 0.4.4 的开发者，用于采集 LiteArm 示教数据并运行训练好的 LeRobot 策略检查点。
