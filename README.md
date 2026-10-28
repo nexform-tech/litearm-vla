@@ -21,14 +21,14 @@ Deploy:  LeRobot policy (30 Hz)
                   ↑
          litearm-vla.deployment (delta gate, checkpoint validation)
                   ↑
-         litearm-vla.policy_robot + litearm-lerobot (servo loops)
+         litearm-lerobot (LiteArmGripCameraRobot + servo loops)
                   ↑
          litearm-python (USB CDC) + litegrip-python (SocketCAN)
 ```
 
-The optional gripper path is separate: `litearm_vla.gripper` → `litegrip-python`
-→ SocketCAN. It shares the recorder's safety monitor but not the arm's USB CDC
-link.
+The gripper controller and the combined adapter live in `litearm-lerobot`:
+`litearm_lerobot.gripper` → `litegrip-python` → SocketCAN. The recording
+adapter reuses that controller and keeps its own safety monitor.
 
 ## Data contract
 
@@ -45,7 +45,7 @@ link.
   under the same feature name. Do not resume or mix them with radian datasets;
   re-record them, or convert the column with the gripper's calibrated
   `rad_to_mm` and regenerate the dataset statistics.
-- A policy command uses the same radians. `LiteArmPolicyRobot` does not stream
+- A policy command uses the same radians. `LiteArmGripCameraRobot` does not stream
   a continuous gripper position: a target at or below the midpoint of the
   calibrated travel becomes a grasp, and a target above it opens the jaws. The
   observation still reports the measured opening continuously.
@@ -69,13 +69,9 @@ PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
   python -m pytest tests/ -q -p no:cacheprovider -rs
 ```
 
-`litearm-vla` installs the gripper SDK from its upstream Git commit because
-`litegrip` is not on PyPI:
-
-```bash
-python -m pip install \
-  "git+https://github.com/nexform-tech/litegrip-python.git@0d46d6d8c598c0caa1ca863748dffb0328d5b80e"
-```
+`litegrip` is not on PyPI. `litearm-lerobot` pins the upstream Git commit and
+installs it, so `litearm-vla` gets the SDK through
+`pip install -e ../litearm-lerobot` above.
 
 The tests fake the arm, cameras, and gripper. They do not open serial, camera,
 CAN, or network robot devices.
@@ -252,9 +248,10 @@ gate and dataset checks.
 
 ## Deploy a policy
 
-`LiteArmPolicyRobot` (registered as `litearm_policy`) runs an eight-dimensional
-arm-and-gripper checkpoint on the same hardware. Validate the checkpoint
-without opening the arm, CAN bus, or camera:
+`LiteArmGripCameraRobot` from `litearm-lerobot` (registered as
+`litearm_grip_camera`) runs an eight-dimensional arm-and-gripper checkpoint on
+the same hardware. Validate the checkpoint without opening the arm, CAN bus, or
+camera:
 
 ```bash
 litearm-vla-run-policy \

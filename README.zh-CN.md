@@ -20,13 +20,14 @@
                 ↑
         litearm-vla.deployment (跳变门禁、检查点校验)
                 ↑
-        litearm-vla.policy_robot + litearm-lerobot (伺服环)
+        litearm-lerobot (LiteArmGripCameraRobot + 伺服环)
                 ↑
         litearm-python (USB CDC) + litegrip-python (SocketCAN)
 ```
 
-可选的夹爪链路是独立的：`litearm_vla.gripper` → `litegrip-python` → SocketCAN。
-它复用录制程序的安全监控，但不占用机械臂的 USB CDC 链路。
+夹爪控制器与组合适配器都在 `litearm-lerobot`：
+`litearm_lerobot.gripper` → `litegrip-python` → SocketCAN。录制适配器复用该
+控制器，并保留自己的安全监控。
 
 ## 数据契约
 
@@ -39,7 +40,7 @@
 - 在此单位规则之前录制的数据集把 `gripper.pos` 以毫米存放在同一个特征名下。
   不要对它们使用 `--resume`，也不要与新弧度数据集混用；请重录，或按夹爪标定的
   `rad_to_mm` 转换该列并重新生成数据集统计量。
-- 策略输出的 `gripper.pos` 也是弧度。`LiteArmPolicyRobot` 不连续下发夹爪位置：
+- 策略输出的 `gripper.pos` 也是弧度。`LiteArmGripCameraRobot` 不连续下发夹爪位置：
   目标不超过标定行程中点时执行 grasp，高于中点时执行 open；观测仍然连续上报
   实测开度。
 - 每条 episode 的最后一个观测被丢弃，因为它没有对应的后续动作。
@@ -62,12 +63,9 @@ PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
   python -m pytest tests/ -q -p no:cacheprovider -rs
 ```
 
-`litegrip` 尚未发布到 PyPI，因此 `litearm-vla` 从上游 Git commit 安装夹爪 SDK：
-
-```bash
-python -m pip install \
-  "git+https://github.com/nexform-tech/litegrip-python.git@0d46d6d8c598c0caa1ca863748dffb0328d5b80e"
-```
+`litegrip` 尚未发布到 PyPI。`litearm-lerobot` 已固定上游 Git commit 并安装它，
+因此执行上面的 `pip install -e ../litearm-lerobot` 后 `litearm-vla` 即可获得该
+SDK。
 
 测试会伪造机械臂、相机和夹爪。它们不会打开串口、相机、CAN 或网络机器人设备。
 
@@ -234,8 +232,8 @@ litearm-vla-record \
 
 ## 部署策略
 
-`LiteArmPolicyRobot`（注册名 `litearm_policy`）在相同硬件上运行 8 维的机械臂与夹爪
-检查点。下面的命令不会打开机械臂、CAN 或相机：
+`litearm-lerobot` 中的 `LiteArmGripCameraRobot`（注册名 `litearm_grip_camera`）
+在相同硬件上运行 8 维的机械臂与夹爪检查点。下面的命令不会打开机械臂、CAN 或相机：
 
 ```bash
 litearm-vla-run-policy \

@@ -234,7 +234,7 @@ def test_phase_announcements_state_whether_data_capture_is_active(monkeypatch):
 
 
 def test_recording_rejects_gripper_without_a_display(monkeypatch, tmp_path):
-    from litearm_vla.gripper import LiteGripOptions
+    from litearm_lerobot import LiteGripOptions
 
     class Robot:
         gripper = object()

@@ -14,7 +14,7 @@ from litearm_vla.deployment import (
     run,
     validate_checkpoint_contract,
 )
-from litearm_vla.policy_robot import ACTION_NAMES
+from litearm_lerobot import ACTION_NAMES
 
 
 def _positions(value=0.0):

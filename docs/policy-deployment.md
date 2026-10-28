@@ -4,9 +4,10 @@ This guide shows deployment engineers how to validate and run a LeRobot checkpoi
 
 ## 1. Match the hardware and feature contract
 
-Use `LiteArmPolicyRobot`, registered as `litearm_policy`, for exactly one
-LiteArm, one LiteGrip, and one camera. It exposes scalar raw features that
-LeRobot 0.4.4 aggregates in this fixed order:
+Use `LiteArmGripCameraRobot` from `litearm-lerobot`, registered as
+`litearm_grip_camera`, for exactly one LiteArm, one LiteGrip, and one camera.
+It exposes scalar raw features that LeRobot 0.4.4 aggregates in this fixed
+order:
 
 ```text
 state/action: joint1.pos ... joint7.pos, gripper.pos

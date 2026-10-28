@@ -28,7 +28,8 @@ from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, log_say
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
-from .gripper import LiteGripOptions
+from litearm_lerobot import LiteGripOptions
+
 from .kinesthetic import RECORD_FPS, KinestheticRobot, KinestheticRobotConfig
 
 log = logging.getLogger(__name__)

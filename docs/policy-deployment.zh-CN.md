@@ -4,8 +4,8 @@
 
 ## 1. 先确认部署契约
 
-策略适配器是 `litearm_policy`，Python 类是 `LiteArmPolicyRobot`。它严格表示以下
-硬件组合：
+策略适配器是 `litearm_grip_camera`，Python 类是 `litearm-lerobot` 中的
+`LiteArmGripCameraRobot`。它严格表示以下硬件组合：
 
 ```text
 一个 LiteArm + 一个 LiteGrip + 一个相机
@@ -202,15 +202,19 @@ litearm-vla-run-policy \
 
 ## 7. 代码方式接入
 
-`LiteArmPolicyRobot` 只有策略模式，连接时必须同时使能机械臂和夹爪：
+`LiteArmGripCameraRobot` 只有策略模式，连接时必须同时使能机械臂和夹爪：
 
 ```python
 from pathlib import Path
 
 from lerobot.cameras.opencv import OpenCVCameraConfig
-from litearm_vla import LiteArmPolicyRobot, LiteArmPolicyRobotConfig, LiteGripOptions
+from litearm_lerobot import (
+    LiteArmGripCameraRobot,
+    LiteArmGripCameraRobotConfig,
+    LiteGripOptions,
+)
 
-config = LiteArmPolicyRobotConfig(
+config = LiteArmGripCameraRobotConfig(
     cameras={
         "wrist": OpenCVCameraConfig(
             index_or_path=Path("/dev/video0"),
@@ -227,7 +231,7 @@ config = LiteArmPolicyRobotConfig(
     ),
 )
 
-with LiteArmPolicyRobot(config) as robot:
+with LiteArmGripCameraRobot(config) as robot:
     observation = robot.get_observation()
     robot.send_action(action)  # action 是 8 维，gripper.pos 用弧度
 ```

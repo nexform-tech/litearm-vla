@@ -18,9 +18,13 @@ from lerobot.cameras import CameraConfig
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.processor import RobotAction, RobotObservation
 from lerobot.robots.config import RobotConfig
-from litearm_lerobot import LiteArmRobot, LiteArmRobotConfig
-
-from .gripper import GRIPPER_FEATURE, LiteGripController, LiteGripOptions
+from litearm_lerobot import (
+    GRIPPER_FEATURE,
+    LiteArmRobot,
+    LiteArmRobotConfig,
+    LiteGripController,
+    LiteGripOptions,
+)
 
 RECORD_FPS = 30
 DEFAULT_JOINT_NAMES = tuple(f"joint{i}" for i in range(1, 8))

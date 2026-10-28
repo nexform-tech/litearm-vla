@@ -291,7 +291,7 @@ class FakeGripper:
 
 @pytest.fixture
 def fake_gripper(monkeypatch):
-    from litearm_vla import gripper as gripper_module
+    from litearm_lerobot import gripper as gripper_module
 
     FakeGripper.instances.clear()
     monkeypatch.setattr(gripper_module.litegrip, "LiteGrip", FakeGripper)

@@ -9,11 +9,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .gripper import LiteGripOptions
-from .policy_robot import (
+from litearm_lerobot import (
     ACTION_NAMES,
     GRIPPER_ACTION_NAME,
     JOINT_ACTION_NAMES,
+    LiteGripOptions,
 )
 
 log = logging.getLogger(__name__)
@@ -354,7 +354,7 @@ def run(args: argparse.Namespace) -> None:
     from lerobot.utils.control_utils import predict_action
     from lerobot.utils.utils import get_safe_torch_device
 
-    from .policy_robot import LiteArmPolicyRobot, LiteArmPolicyRobotConfig
+    from litearm_lerobot import LiteArmGripCameraRobot, LiteArmGripCameraRobotConfig
 
     checkpoint = Path(args.checkpoint).expanduser().resolve()
     policy_config = PreTrainedConfig.from_pretrained(checkpoint, local_files_only=True)
@@ -428,7 +428,7 @@ def run(args: argparse.Namespace) -> None:
         width=args.camera_width,
         height=args.camera_height,
     )
-    robot_config = LiteArmPolicyRobotConfig(
+    robot_config = LiteArmGripCameraRobotConfig(
         port=args.arm_port,
         cameras={args.camera_name: camera_config},
         enable_on_connect=True,
@@ -443,7 +443,7 @@ def run(args: argparse.Namespace) -> None:
             mount=args.gripper_mount,
         ),
     )
-    robot = LiteArmPolicyRobot(robot_config)
+    robot = LiteArmGripCameraRobot(robot_config)
     features = _dataset_features(args.camera_name, args.camera_height, args.camera_width)
 
     period = 1.0 / args.fps

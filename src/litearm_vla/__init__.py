@@ -1,6 +1,14 @@
-"""LiteArm VLA adapters for data collection and policy deployment."""
+"""LiteArm VLA workflows for data collection and policy deployment."""
 
-from .gripper import GRIPPER_FEATURE, GripperError, LiteGripOptions
+from litearm_lerobot import (
+    ACTION_NAMES,
+    GRIPPER_FEATURE,
+    GripperError,
+    LiteArmGripCameraRobot,
+    LiteArmGripCameraRobotConfig,
+    LiteGripOptions,
+)
+
 from .kinesthetic import (
     RECORD_FPS,
     KinestheticRobot,
@@ -8,18 +16,13 @@ from .kinesthetic import (
     KinestheticSample,
     SafetyError,
 )
-from .policy_robot import (
-    ACTION_NAMES,
-    LiteArmPolicyRobot,
-    LiteArmPolicyRobotConfig,
-)
 
 __all__ = [
     "ACTION_NAMES",
     "GRIPPER_FEATURE",
     "GripperError",
-    "LiteArmPolicyRobot",
-    "LiteArmPolicyRobotConfig",
+    "LiteArmGripCameraRobot",
+    "LiteArmGripCameraRobotConfig",
     "LiteGripOptions",
     "RECORD_FPS",
     "KinestheticRobot",
@@ -27,4 +30,3 @@ __all__ = [
     "KinestheticSample",
     "SafetyError",
 ]
-
