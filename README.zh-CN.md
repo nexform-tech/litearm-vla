@@ -1,20 +1,28 @@
 [English](README.md) | 中文
 
-本仓库面向使用 LeRobot 0.4.4 的开发者，用于采集用于策略训练的 LiteArm 示教数据。
+本仓库面向使用 LeRobot 0.4.4 的开发者，用于采集 LiteArm 示教数据并运行训练好的 LeRobot 策略检查点。
 
 # litearm-vla
 
-首个支持的工作流是直接的单臂手动引导（动觉）采集。它不会启动、连接或导入
-`litearm-vr-follow`。
+两个工作流共用同一份数据契约：直接的单臂手动引导（动觉）采集，以及在相同机械臂、
+夹爪和相机上的策略部署。两者都不会启动、连接或导入 `litearm-vr-follow`。
 
 ```text
-LeRobot 数据集/相机
-          ↑
-litearm-vla (30 Hz q[t] -> q[t+1])
-          ↑
-litearm-lerobot (Robot 生命周期与固件限位)
-          ↑
-litearm-python (USB CDC 与零重力保活)
+录制：  LeRobot 数据集/相机
+                ↑
+        litearm-vla (30 Hz q[t] -> q[t+1])
+                ↑
+        litearm-lerobot (Robot 生命周期与固件限位)
+                ↑
+        litearm-python (USB CDC 与零重力保活)
+
+部署：  LeRobot 策略 (30 Hz)
+                ↑
+        litearm-vla.deployment (跳变门禁、检查点校验)
+                ↑
+        litearm-vla.policy_robot + litearm-lerobot (伺服环)
+                ↑
+        litearm-python (USB CDC) + litegrip-python (SocketCAN)
 ```
 
 可选的夹爪链路是独立的：`litearm_vla.gripper` → `litegrip-python` → SocketCAN。
@@ -31,8 +39,9 @@ litearm-python (USB CDC 与零重力保活)
 - 在此单位规则之前录制的数据集把 `gripper.pos` 以毫米存放在同一个特征名下。
   不要对它们使用 `--resume`，也不要与新弧度数据集混用；请重录，或按夹爪标定的
   `rad_to_mm` 转换该列并重新生成数据集统计量。
-- 策略输出的 `gripper.pos` 也是弧度；下发给 LiteGrip 前必须用
-  `position_mm = position_rad * rad_to_mm` 换回毫米。
+- 策略输出的 `gripper.pos` 也是弧度。`LiteArmPolicyRobot` 不连续下发夹爪位置：
+  目标不超过标定行程中点时执行 grasp，高于中点时执行 open；观测仍然连续上报
+  实测开度。
 - 每条 episode 的最后一个观测被丢弃，因为它没有对应的后续动作。
 - 录制固定为 30 Hz，采样率不达标的 episode 会被丢弃。
 - 相机、数据集特征、视频编码、episode 保存、续录、重录控制以及可选的 Hub
@@ -222,6 +231,22 @@ litearm-vla-record \
 有关分阶段硬件准入与数据集检查，请参阅[录制指南](docs/kinesthetic-recording.zh-CN.md)。
 数据集准备完成后，请按照 [SmolVLA 训练教程](docs/smolvla-training.zh-CN.md)先完成
 离线字段检查和 10-step 冒烟训练。当前 `smoke-v3` 数据只用于验证训练链路。
+
+## 部署策略
+
+`LiteArmPolicyRobot`（注册名 `litearm_policy`）在相同硬件上运行 8 维的机械臂与夹爪
+检查点。下面的命令不会打开机械臂、CAN 或相机：
+
+```bash
+litearm-vla-run-policy \
+  --checkpoint /absolute/path/to/pretrained_model \
+  --task "pick the red cube" \
+  --gripper-calibration /absolute/path/to/can0_calibration.json
+```
+
+只有通过[策略部署指南](docs/policy-deployment.zh-CN.md)里的分阶段硬件门槛后，才加上
+`--enable-motion`。该指南说明跳变门禁（关节 `0.10 rad`、夹爪 `0.05 rad`）、硬件
+检查、首轮受限运行，以及 `Ctrl+C` 的受控停机顺序。
 
 ## 故障排查
 

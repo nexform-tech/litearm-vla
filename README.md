@@ -1,20 +1,29 @@
 English | [中文](README.zh-CN.md)
 
-This repository records policy-training LiteArm demonstrations for developers using LeRobot 0.4.4.
+This repository records policy-training LiteArm demonstrations and runs trained LeRobot policy checkpoints, for developers using LeRobot 0.4.4.
 
 # litearm-vla
 
-The first supported workflow is direct, single-arm kinesthetic collection. It
-does not start, connect to, or import `litearm-vr-follow`.
+Two workflows share one data contract: direct, single-arm kinesthetic
+collection, and policy deployment on the same arm, gripper, and camera. Neither
+starts, connects to, or imports `litearm-vr-follow`.
 
 ```text
-LeRobot dataset/cameras
-          ↑
-litearm-vla (30 Hz q[t] -> q[t+1])
-          ↑
-litearm-lerobot (Robot lifecycle and firmware limits)
-          ↑
-litearm-python (USB CDC and zero-gravity keepalive)
+Record:  LeRobot dataset/cameras
+                  ↑
+         litearm-vla (30 Hz q[t] -> q[t+1])
+                  ↑
+         litearm-lerobot (Robot lifecycle and firmware limits)
+                  ↑
+         litearm-python (USB CDC and zero-gravity keepalive)
+
+Deploy:  LeRobot policy (30 Hz)
+                  ↑
+         litearm-vla.deployment (delta gate, checkpoint validation)
+                  ↑
+         litearm-vla.policy_robot + litearm-lerobot (servo loops)
+                  ↑
+         litearm-python (USB CDC) + litegrip-python (SocketCAN)
 ```
 
 The optional gripper path is separate: `litearm_vla.gripper` → `litegrip-python`
@@ -36,8 +45,10 @@ link.
   under the same feature name. Do not resume or mix them with radian datasets;
   re-record them, or convert the column with the gripper's calibrated
   `rad_to_mm` and regenerate the dataset statistics.
-- A policy command uses the same radians. Convert it back with
-  `position_mm = position_rad * rad_to_mm` before commanding LiteGrip.
+- A policy command uses the same radians. `LiteArmPolicyRobot` does not stream
+  a continuous gripper position: a target at or below the midpoint of the
+  calibrated travel becomes a grasp, and a target above it opens the jaws. The
+  observation still reports the measured opening continuously.
 - The final observation is dropped because it has no future action.
 - Recording is fixed at 30 Hz and slow episodes are discarded.
 - LeRobot owns cameras, dataset features, video encoding, episode save, resume,
@@ -238,6 +249,24 @@ a headless run stops before opening either device.
 
 See [the recording guide](docs/kinesthetic-recording.md) for the staged hardware
 gate and dataset checks.
+
+## Deploy a policy
+
+`LiteArmPolicyRobot` (registered as `litearm_policy`) runs an eight-dimensional
+arm-and-gripper checkpoint on the same hardware. Validate the checkpoint
+without opening the arm, CAN bus, or camera:
+
+```bash
+litearm-vla-run-policy \
+  --checkpoint /absolute/path/to/pretrained_model \
+  --task "pick the red cube" \
+  --gripper-calibration /absolute/path/to/can0_calibration.json
+```
+
+Add `--enable-motion` only after the hardware gates in
+[the policy deployment guide](docs/policy-deployment.md). That guide covers the
+delta gate (`0.10 rad` per joint, `0.05 rad` for the gripper), the staged
+hardware checks, the bounded first run, and the controlled stop on `Ctrl+C`.
 
 ## Troubleshooting
 
