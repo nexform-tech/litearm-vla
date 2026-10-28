@@ -289,6 +289,33 @@ class LiteGripController:
     def request_close(self) -> None:
         self._request("close")
 
+    def request_opening_rad(self, target_rad: float) -> None:
+        """Apply a continuous opening target as the nearest open or grasp command.
+
+        The policy path commands the gripper in the two modes this controller
+        already owns, not as a continuous position stream: the jaws either
+        travel to the calibrated open limit or close until the grasp force or
+        the closed stop ends the motion. ``target_rad`` is the policy's
+        requested opening in radians (0 at the closed stop). Anything at or
+        below the midpoint of the calibrated travel is a grasp; anything above
+        it opens. The observation still reports the measured opening in
+        radians, so the recorded and deployed state share one unit.
+        """
+        target = float(target_rad)
+        if not math.isfinite(target):
+            raise GripperError("gripper.pos must be finite")
+        if target <= 0.5 * self.travel_rad:
+            self.request_close()
+        else:
+            self.request_open()
+
+    @property
+    def travel_rad(self) -> float:
+        """Calibrated travel as an opening angle, in radians."""
+        if self._rad_to_mm <= 0.0:
+            raise GripperError("LiteGrip calibration is not loaded")
+        return self._travel_mm / self._rad_to_mm
+
     def _request(self, command: str) -> None:
         if self._gripper is None:
             raise GripperError("LiteGrip is not connected")

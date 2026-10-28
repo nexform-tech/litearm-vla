@@ -452,3 +452,44 @@ def test_unusable_rad_to_mm_is_rejected(value):
 def test_invalid_gripper_options_are_rejected(options):
     with pytest.raises(ValueError):
         options.validate()
+
+
+def _connected_controller(fake_gripper):
+    controller = LiteGripController(
+        LiteGripOptions(enabled=True, hold_hz=50.0, grasp_hold_s=0.01)
+    )
+    controller.connect()
+    return controller, fake_gripper.instances[-1]
+
+
+def test_request_opening_below_the_midpoint_grabs(fake_gripper):
+    controller, gripper = _connected_controller(fake_gripper)
+    try:
+        controller.request_opening_rad(0.0)
+        assert _wait_for(gripper.events, "grasp")
+    finally:
+        controller.disconnect()
+
+
+def test_request_opening_above_the_midpoint_opens(fake_gripper):
+    controller, gripper = _connected_controller(fake_gripper)
+    try:
+        controller.request_opening_rad(controller.travel_rad)
+        assert _wait_for(gripper.events, "open")
+    finally:
+        controller.disconnect()
+
+
+def test_request_opening_rejects_a_non_finite_target(fake_gripper):
+    controller, _ = _connected_controller(fake_gripper)
+    try:
+        with pytest.raises(GripperError, match="finite"):
+            controller.request_opening_rad(float("nan"))
+    finally:
+        controller.disconnect()
+
+
+def test_travel_rad_requires_a_loaded_calibration():
+    controller = LiteGripController(LiteGripOptions(enabled=True))
+    with pytest.raises(GripperError, match="calibration"):
+        controller.travel_rad
