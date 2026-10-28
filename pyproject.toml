@@ -23,6 +23,7 @@ dev = ["pytest>=7"]
 
 [project.scripts]
 litearm-vla-record = "litearm_vla.record:main"
+litearm-vla-run-policy = "litearm_vla.deployment:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
