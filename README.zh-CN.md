@@ -1,8 +1,8 @@
+# litearm-vla
+
 [English](README.md) | 中文
 
 本仓库面向使用 LeRobot 0.4.4 的开发者，用于采集用于策略训练的 LiteArm 示教数据。
-
-# litearm-vla
 
 首个支持的工作流是直接的单臂手动引导（动觉）采集。它不会启动、连接或导入
 `litearm-vr-follow`。

@@ -1,8 +1,8 @@
+# litearm-vla
+
 English | [中文](README.zh-CN.md)
 
 This repository records policy-training LiteArm demonstrations for developers using LeRobot 0.4.4.
-
-# litearm-vla
 
 The first supported workflow is direct, single-arm kinesthetic collection. It
 does not start, connect to, or import `litearm-vr-follow`.
