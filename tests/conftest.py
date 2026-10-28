@@ -129,6 +129,30 @@ class FakeArm:
         self.events.append(("movej", list(q), speed))
         return self.state
 
+    def joint_follow(self, q, dq, kp, kd):
+        self.events.append(
+            (
+                "joint_follow",
+                [float(value) for value in q],
+                [float(value) for value in dq],
+                [float(value) for value in kp],
+                [float(value) for value in kd],
+            )
+        )
+        for joint, value in zip(self.state.joints, q):
+            joint.q = float(value)
+
+    def move_js(self, q, dq=None, tau_ff=None):
+        self.events.append(
+            (
+                "move_js",
+                [float(value) for value in q],
+                None if dq is None else [float(value) for value in dq],
+            )
+        )
+        for joint, value in zip(self.state.joints, q):
+            joint.q = float(value)
+
     def close(self):
         self.events.append("close")
 
